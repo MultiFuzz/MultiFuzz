@@ -1,0 +1,21 @@
+[package]
+name = "icicle-cortexm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pcode = { workspace = true }
+icicle-vm = { workspace = true }
+icicle-fuzzing = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+indexmap = { workspace = true }
+hashbrown = { workspace = true }
+object = { version = "0.32.1", default-features = false, features = ["read", "std", "elf"] }
+
+[build-dependencies]
+cc = "1.0.83"
+bindgen = { version = "0.69.1", features = ["runtime"], default-features = false }
+

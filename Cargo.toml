@@ -1,0 +1,18 @@
+[workspace]
+members = ["hail-fuzz", "icicle-cortexm"]
+default-members = ["hail-fuzz"]
+resolver = "2"
+
+[workspace.dependencies]
+icicle-fuzzing = { git = "https://github.com/icicle-emu/icicle-emu" }
+icicle-gdb = { git = "https://github.com/icicle-emu/icicle-emu" }
+icicle-vm = { git = "https://github.com/icicle-emu/icicle-emu" }
+pcode = { git = "https://github.com/icicle-emu/icicle-emu" }
+sleigh-runtime = { git = "https://github.com/icicle-emu/icicle-emu" }
+anyhow = { version = "1.0.80", features = ["backtrace"] }
+tracing = { version = "0.1.40", default-features = false, features = ["release_max_level_trace"] }
+serde = { version = "1.0.193", features = ["derive"] }
+serde_yaml = "0.9.27"
+serde_json = "1.0.115"
+indexmap = { version = "2.1.0", features = ["serde"] }
+hashbrown = "0.14.3"

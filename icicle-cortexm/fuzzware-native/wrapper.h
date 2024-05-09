@@ -1,0 +1,6 @@
+#include "unicorn.h"
+#include "native_hooks.h"
+#include "timer.h"
+#include "interrupt_triggers.h"
+#include "core_peripherals/cortexm_nvic.h"
+#include "core_peripherals/cortexm_systick.h"

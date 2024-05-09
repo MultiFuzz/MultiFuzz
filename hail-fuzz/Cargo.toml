@@ -1,0 +1,26 @@
+[package]
+name = "hail-fuzz"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+ctrlc = "3.4.4"
+rand = { version = "0.8.5", features = ["small_rng"] }
+rand_distr = "0.4.3"
+bytemuck = "1.15.0"
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3.18", default-features = false, features = ["fmt", "env-filter", "ansi"] }
+hashbrown = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bstr = { version = "1.9.1", default-features = false }
+core_affinity = "0.8.1"
+glob = "0.3.1"
+icicle-vm = { workspace = true }
+icicle-fuzzing = { workspace = true }
+icicle-gdb = { workspace = true }
+sleigh-runtime = { workspace = true }
+pcode = { workspace = true }
+icicle-cortexm = { path = "../icicle-cortexm" }
+byteorder = "1.5.0"

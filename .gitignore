@@ -1,0 +1,17 @@
+/target
+
+# Replay files
+cmplog.txt
+trace.txt
+trace.svg
+mmio_reads.txt
+il.pcode
+jit_table.txt
+
+# Profiling data
+flamegraph.svg
+perf.data*
+
+# Workdir
+workdir/
+workdir-*
