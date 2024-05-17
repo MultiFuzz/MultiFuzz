@@ -2,7 +2,7 @@
 
 Code release for [MultiFuzz: A Multi-Stream Fuzzer For Testing Monolithic Firmware](https://www.usenix.org/conference/usenixsecurity24/presentation/chesser).
 
-<img alt="Paper preview" align="right" width="266" src="preview.png"></a>
+<a href="https://www.usenix.org/conference/usenixsecurity24/presentation/chesser"><img alt="Paper preview" align="right" width="266" src="preview.png"></a>
 
 
 ## Quickstart
@@ -27,21 +27,22 @@ The first time the fuzzer runs it will generate an initial config file (`config.
 
 The fuzzer can be configure using environment variables:
 
-- `WORKDIR`: (default=`workdir`) Configures the directory the fuzzer uses to store information about the fuzzing session.
-- `COVERAGE_MODE`: Controls the coverage instrumentation used for feedback by the fuzzer (if unspecified the default mode is `blocks`).
+- `WORKDIR=<path>`: (default=`workdir`) Configures the directory the fuzzer uses to store information about the fuzzing session.
+- `COVERAGE_MODE=<type>`: Controls the coverage instrumentation used for feedback by the fuzzer (if unspecified the default mode is `blocks`). Where `<type>` is one of:
     - `blocks`: Store a bit whenever a block is hit.
     - `edges`: Store a bit whenever an edge is hit.
     - `blockcounts`: Increment a counter whenever a block is hit.
     - `edgecounts`: (AFL-style) Increment a counter whenever an edge is hit.
-- `REPLAY`: Instead of running the fuzzer, execute the input specified by the
-- `GEN_BLOCK_COVERAGE`: Replay all the inputs in `WORKDIR/queue` with additional tracing enabled to produce a json file containing information about the blocks discovered during the fuzzing campaign.
+- `REPLAY=<path>`: Instead of running the fuzzer, execute the input specified at `<path>`
+- `GEN_BLOCK_COVERAGE=<type>`: Replay all the inputs in `WORKDIR/queue` with additional tracing enabled to produce a json file containing information about the blocks discovered during the fuzzing campaign.
     - `full`: Output the newly discovered found by each input.
     - `blocks`: Output just the unique blocks found and the time and input the block was found at.
 - `ANALYZE_CRASHES`: Replay all inputs in `WORKDIR/crashes` and print information about unknown crashes.
+- `RUN_FOR=<time>`: Stop the fuzzer after the specified period of time has elapsed. e.g. (`RUN_FOR=24h`). Allowed suffixes are `s` (seconds), `m` (minutes), `h` (hours).
 
 ### Debugging options
 
-- `GDB_BIND`: (only used when `REPLAY` is set) address to bind a gdb-stub instance to, waiting for `gdb` to connect for debugging.
+- `GDB_BIND=<socket address>`: (only used when `REPLAY` is set) address to bind a gdb-stub instance to, waiting for `gdb` to connect for debugging.
 - `PRINT_HOOK`: Allows a hook to be injected at a symbol to print the output of string buffer.
   - One register form (e.g. `PRINT_HOOK='putc(r0:char)`, `PRINT_HOOK='puts(r0:str)`): argument is treated as a character or null terminated string.
   - Two register form (e.g. `PRINT_HOOK='stdio_write(r0,r1)`): first argument is treated as a pointer, the second argument is treated as length.
