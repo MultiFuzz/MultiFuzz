@@ -114,11 +114,11 @@ fn run() -> anyhow::Result<()> {
     let config =
         Config { fuzzer: fuzzer_config, workdir, firmware: firmware_config, interrupt_flag };
 
-    if let Some(path) = std::env::var_os("REPLAY") {
-        return debugging::replay(config, path.as_ref());
+    if let Ok(path) = std::env::var("REPLAY") {
+        return debugging::replay(config, &path);
     }
-    if let Some(path) = std::env::var_os("ANALYZE_CRASHES") {
-        return debugging::analyze_crashes(config, path.as_ref());
+    if let Ok(path) = std::env::var("ANALYZE_CRASHES") {
+        return debugging::analyze_crashes(config, &path);
     }
     if let Some(path) = std::env::var_os("RUN_I2S_STAGE") {
         return debugging::stage::run_stage(config, path.as_ref(), Stage::InputToState);

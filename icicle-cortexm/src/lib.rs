@@ -15,7 +15,7 @@ use icicle_vm::{
         debug_info::{DebugInfo, SourceLocation},
         mem::{perm, IoHandler, IoMemory, Mapping},
         utils::get_u64,
-        Cpu, ExceptionCode, ValueSource,
+        Cpu, Exception, ExceptionCode, ValueSource,
     },
     VmExit,
 };
@@ -316,7 +316,7 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
 
         tracing::info!("Crashing at: {crash_at:x?}");
         vm.hook_many_addresses(&crash_at, |cpu, addr| {
-            cpu.exception = icicle_vm::cpu::Exception::new(ExceptionCode::InvalidInstruction, addr);
+            cpu.exception = Exception::new(ExceptionCode::InvalidInstruction, addr);
         });
 
         let lr = vm.cpu.arch.sleigh.get_reg("lr").unwrap().var;
@@ -325,22 +325,34 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
 
         // Register functions that the fuzzer should exit at.
         let mut exit_at = vec![];
+        let mut hang_at = vec![];
         for (symbol, handler) in &config.exit_at {
-            anyhow::ensure!(
-                handler.is_none(),
-                "Expected handler for exit_at symbol: {symbol} to be null"
-            );
             let Some(addr) = lookup_table.get(symbol)
             else {
                 tracing::error!("Failed to resolve address of: {symbol}");
                 continue;
             };
-            exit_at.push(*addr);
+
+            match handler.as_ref().map(|x| x.as_str()) {
+                Some("hang") => hang_at.push(*addr),
+                Some(unknown) => anyhow::bail!("Unknown handler for exit_at {symbol}: {unknown}"),
+                None => exit_at.push(*addr),
+            }
         }
-        tracing::info!("Halting at: {exit_at:x?}");
-        vm.hook_many_addresses(&exit_at, |cpu, addr| {
-            cpu.exception = icicle_vm::cpu::Exception::new(ExceptionCode::Halt, addr);
-        });
+
+        if !exit_at.is_empty() {
+            tracing::info!("Halting at: {exit_at:x?}");
+            vm.hook_many_addresses(&exit_at, |cpu, addr| {
+                cpu.exception = Exception::new(ExceptionCode::Halt, addr);
+            });
+        }
+
+        if !hang_at.is_empty() {
+            tracing::info!("Hanging at: {hang_at:x?}");
+            vm.hook_many_addresses(&hang_at, |cpu, addr| {
+                cpu.exception = Exception::new(ExceptionCode::Halt, addr);
+            });
+        }
 
         for (addr, patch) in &config.patch {
             let reg = vm.cpu.arch.sleigh.get_reg(&patch.register).ok_or_else(|| {
@@ -352,6 +364,10 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
                 reg.var,
                 patch.value,
             );
+        }
+
+        for (addr, value) in &config.mem_patch {
+            vm.cpu.mem.write_bytes(*addr, &value, perm::NONE)?;
         }
 
         Ok(())

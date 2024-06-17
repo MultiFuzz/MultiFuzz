@@ -1,4 +1,7 @@
-use std::{io::Write, path::Path};
+use std::{
+    io::{Read, Write},
+    path::{Path, PathBuf},
+};
 
 use anyhow::Context;
 use hashbrown::HashMap;
@@ -88,12 +91,13 @@ pub fn save_block_coverage(mut config: Config, mode: SaveMode) -> anyhow::Result
     Ok(())
 }
 
-pub fn replay(mut config: Config, input_path: &Path) -> anyhow::Result<()> {
+pub fn replay(mut config: Config, path: &str) -> anyhow::Result<()> {
     let features = config::EnabledFeatures::from_env()?;
     let (mut target, mut vm) = setup_vm(&mut config, &features)?;
     target.initialize_vm(&config.fuzzer, &mut vm)?;
 
-    let mut input = MultiStream::from_path(input_path)?;
+    let mut input = MultiStream::from_bytes(&InputSource::from_str(path).read()?)
+        .with_context(|| format!("Invalid file format: {path}"))?;
     modify_input(&mut input);
     target.get_mmio_handler(&mut vm).unwrap().clone_from(&input);
 
@@ -213,7 +217,7 @@ fn replay_trace(mut vm: Vm, mut target: CortexmMultiStream) -> anyhow::Result<()
     Ok(())
 }
 
-pub fn analyze_crashes(mut config: Config, path: &Path) -> anyhow::Result<()> {
+pub fn analyze_crashes(mut config: Config, path: &str) -> anyhow::Result<()> {
     let features = config::EnabledFeatures::from_env()?;
     let (mut target, mut vm) = setup_vm(&mut config, &features)?;
     target.initialize_vm(&config.fuzzer, &mut vm)?;
@@ -221,19 +225,18 @@ pub fn analyze_crashes(mut config: Config, path: &Path) -> anyhow::Result<()> {
     let path_tracer = trace::add_path_tracer(&mut vm, target.mmio_handler.unwrap())?;
     let xpsr_reg = vm.cpu.arch.sleigh.get_reg("xpsr").unwrap().var;
 
+    let input_src = InputSource::from_str(path);
+
     let snapshot = vm.snapshot();
-    for entry in
-        std::fs::read_dir(path).with_context(|| format!("failed to read: {}", path.display()))?
-    {
-        let path = entry?.path();
+    for entry in input_src.list_files().with_context(|| format!("failed list files in: {path}"))? {
         vm.restore(&snapshot);
         path_tracer.clear(&mut vm);
 
-        let input = MultiStream::from_path(&path)
-            .with_context(|| format!("failed to read: {}", path.display()))?;
+        let input = MultiStream::from_bytes(&input_src.read_child(&entry)?)
+            .with_context(|| format!("Invalid file format: {}", entry.display()))?;
         target.get_mmio_handler(&mut vm).unwrap().clone_from(&input);
 
-        eprintln!("-------------------\n{}", path.display());
+        eprintln!("-------------------\n{}", entry.display());
         let exit = target.run(&mut vm)?;
         let active_irq = vm.cpu.read_reg(xpsr_reg) & 0x1ff;
         eprintln!(
@@ -252,4 +255,143 @@ pub fn analyze_crashes(mut config: Config, path: &Path) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Compression {
+    None,
+    Gz,
+}
+
+impl Compression {
+    fn open_reader(&self, path: &Path) -> std::io::Result<Box<dyn std::io::Read>> {
+        let file = std::fs::File::open(path)?;
+        match self {
+            Self::None => Ok(Box::new(std::io::BufReader::new(file))),
+            Self::Gz => Ok(Box::new(flate2::read::GzDecoder::new(file))),
+        }
+    }
+}
+
+enum PathKind {
+    Path,
+    Tar { subpath: Option<PathBuf> },
+}
+
+struct InputSource {
+    path: PathBuf,
+    kind: PathKind,
+    compression: Compression,
+}
+
+impl InputSource {
+    pub fn from_str(path: &str) -> Self {
+        let (file_path, subpath) = match path.rsplit_once(":") {
+            Some((file_path, subpath)) => (file_path, Some(PathBuf::from(subpath))),
+            None => (path, None),
+        };
+
+        let (stem, compression) =
+            match file_path.strip_suffix(".gz").or_else(|| file_path.strip_suffix(".gzip")) {
+                Some(stem) => (stem, Compression::Gz),
+                None if file_path.ends_with(".tgz") => (file_path, Compression::None),
+                None => (file_path, Compression::None),
+            };
+
+        if stem.ends_with(".tgz") || stem.ends_with(".tar") {
+            Self { path: PathBuf::from(file_path), kind: PathKind::Tar { subpath }, compression }
+        }
+        else {
+            Self { path: PathBuf::from(file_path), kind: PathKind::Path, compression }
+        }
+    }
+
+    pub fn list_files(&self) -> anyhow::Result<Vec<PathBuf>> {
+        match &self.kind {
+            PathKind::Path => {
+                anyhow::ensure!(
+                    matches!(self.compression, Compression::None),
+                    "attempted to read compressed file as a directory: {}",
+                    self.path.display()
+                );
+
+                Ok(std::fs::read_dir(&self.path)
+                    .with_context(|| format!("failed to read: {}", self.path.display()))?
+                    .map(|x| x.map(|x| x.path()))
+                    .collect::<Result<Vec<_>, _>>()?)
+            }
+            PathKind::Tar { subpath } => {
+                let subpath = subpath.as_deref().unwrap_or(Path::new(""));
+                let mut archive = tar::Archive::new(self.compression.open_reader(&self.path)?);
+                Ok(archive
+                    .entries()?
+                    .flat_map(|x| x)
+                    .filter(|x| x.header().entry_type().is_file())
+                    .flat_map(|x| Some(x.path().ok()?.into_owned()))
+                    .filter(|x| x.parent().unwrap_or(Path::new("")) == subpath)
+                    .flat_map(|x| Some(x.file_name()?.into()))
+                    .collect())
+            }
+        }
+    }
+
+    pub fn read(&self) -> anyhow::Result<Vec<u8>> {
+        match &self.kind {
+            PathKind::Path => {
+                let mut out = vec![];
+                self.compression
+                    .open_reader(&self.path)
+                    .with_context(|| format!("failed to read: {}", self.path.display()))?
+                    .read_to_end(&mut out)?;
+                Ok(out)
+            }
+            PathKind::Tar { subpath } => {
+                let file_path = subpath.as_deref().ok_or_else(|| {
+                    anyhow::format_err!(
+                        "expected subpath for .tar archive: {}",
+                        self.path.display()
+                    )
+                })?;
+                read_within(&self.path, file_path, &self.compression)
+            }
+        }
+    }
+
+    pub fn read_child(&self, file: &Path) -> anyhow::Result<Vec<u8>> {
+        match &self.kind {
+            PathKind::Path => {
+                anyhow::ensure!(
+                    matches!(self.compression, Compression::None),
+                    "attempted to read compressed file as a directory: {}",
+                    self.path.display()
+                );
+
+                let file_path = self.path.join(file);
+                std::fs::read(&file_path)
+                    .with_context(|| format!("failed to read: {}", file_path.display()))
+            }
+            PathKind::Tar { subpath } => {
+                let file_path = subpath.as_deref().unwrap_or(Path::new("")).join(file);
+                read_within(&self.path, &file_path, &self.compression)
+            }
+        }
+    }
+}
+
+fn read_within(
+    tar_path: &Path,
+    file_path: &Path,
+    compression: &Compression,
+) -> anyhow::Result<Vec<u8>> {
+    let mut archive = tar::Archive::new(compression.open_reader(tar_path)?);
+    let Some(mut entry) =
+        archive.entries()?.flatten().find(|x| x.path().map_or(false, |path| path == file_path))
+    else {
+        anyhow::bail!("failed to find {} in {}", file_path.display(), tar_path.display());
+    };
+    let mut buf = vec![];
+    entry.read_to_end(&mut buf).with_context(|| {
+        format!("error reading: {} from {}", file_path.display(), tar_path.display())
+    })?;
+    Ok(buf)
 }

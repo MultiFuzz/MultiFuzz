@@ -416,30 +416,38 @@ pub unsafe extern "C" fn timer_expired(ctx: *mut c_void, number: i32, timer: *mu
 }
 
 /// A magic location used for reading other data from the fuzzer (that is not a valid MMIO address).
-const FUZZ_DATA_ADDR: u64 = 0xaaaa_aaa0;
+const IRQ_NUMBER_ADDR: u64 = 0xaaaa_aaa0;
 
 pub unsafe extern "C" fn get_next_irq_number(ctx: *mut c_void, number: *mut u8) -> bool {
     let ctx = &mut *ctx.cast::<Context>();
     let vm = unsafe { &mut *ctx.vm };
 
     let mut buf = [0];
-    if vm.cpu.mem.get_io_memory_mut(ctx.io_handle.unwrap()).read(FUZZ_DATA_ADDR, &mut buf).is_err()
+    if vm.cpu.mem.get_io_memory_mut(ctx.io_handle.unwrap()).read(IRQ_NUMBER_ADDR, &mut buf).is_err()
     {
-        vm.cpu.exception = Exception::new(ExceptionCode::ReadWatch, FUZZ_DATA_ADDR);
+        vm.cpu.exception = Exception::new(ExceptionCode::ReadWatch, IRQ_NUMBER_ADDR);
         return false;
     }
     *number = buf[0];
     true
 }
 
+/// The location to read timer choices from
+const TIMER_CHOICE_ADDR: u64 = IRQ_NUMBER_ADDR + 4;
+
 pub unsafe extern "C" fn get_next_timer_choice(ctx: *mut c_void, choice: *mut u8) -> bool {
     let ctx = &mut *ctx.cast::<Context>();
     let vm = unsafe { &mut *ctx.vm };
 
     let mut buf = [0];
-    if vm.cpu.mem.get_io_memory_mut(ctx.io_handle.unwrap()).read(FUZZ_DATA_ADDR, &mut buf).is_err()
+    if vm
+        .cpu
+        .mem
+        .get_io_memory_mut(ctx.io_handle.unwrap())
+        .read(TIMER_CHOICE_ADDR, &mut buf)
+        .is_err()
     {
-        vm.cpu.exception = Exception::new(ExceptionCode::ReadWatch, FUZZ_DATA_ADDR + 4);
+        vm.cpu.exception = Exception::new(ExceptionCode::ReadWatch, TIMER_CHOICE_ADDR);
         return false;
     }
     *choice = buf[0];

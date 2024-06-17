@@ -27,6 +27,10 @@ pub(crate) const MAX_STREAM_LEN: usize = 0x50_000;
 /// Currrently we do not use this feature.
 pub(crate) const INCREASE_EXTENSIONS_ON_FIRST_EXEC_FACTOR: usize = 1;
 
+/// Configures the CmpLog stage to skip comparisons involving `<`, `>`, overflow or floating point
+/// operations.
+pub(crate) const SKIP_COMPLEX_COMPARISIONS: bool = true;
+
 #[derive(Clone)]
 pub struct Config {
     pub fuzzer: FuzzConfig,

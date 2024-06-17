@@ -63,7 +63,7 @@ impl MultiStreamExtendStage {
         fuzzer.state.input.seek_to_start();
         fuzzer.write_input_to_target().unwrap();
         let exit = fuzzer.execute().ok_or(StageStartError::Interrupted)?;
-        if matches!(exit, VmExit::InstructionLimit) {
+        if !matches!(exit, VmExit::UnhandledException((ExceptionCode::ReadWatch, _))) {
             // Never attempt to extend inputs that timeout.
             tracing::trace!("attempted to extend hanging input");
             return Err(StageStartError::Skip);

@@ -24,3 +24,5 @@ sleigh-runtime = { workspace = true }
 pcode = { workspace = true }
 icicle-cortexm = { path = "../icicle-cortexm" }
 byteorder = "1.5.0"
+tar = "0.4.40"
+flate2 = "1.0.27"

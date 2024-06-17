@@ -1,6 +1,6 @@
 use icicle_fuzzing::cmplog2::{CmpAttr, CmpCallData, CmpInstData};
 
-use crate::i2s::Comparisons;
+use crate::{config::SKIP_COMPLEX_COMPARISIONS, i2s::Comparisons};
 
 pub(crate) fn analyse_comparisons(entry: &CmpInstData) -> (ValueKind, ValueKind) {
     let a_kind = match entry.op.arg1 {
@@ -15,7 +15,11 @@ pub(crate) fn analyse_comparisons(entry: &CmpInstData) -> (ValueKind, ValueKind)
 }
 
 pub(crate) fn add_interesting_inst_cmps(entry: &CmpInstData, output: &mut Comparisons) {
-    if !(entry.op.kind == CmpAttr::IS_EQUAL || entry.op.kind == CmpAttr::NOT_EQUAL) {
+    if SKIP_COMPLEX_COMPARISIONS
+        && (entry.op.kind.intersects(
+            CmpAttr::IS_LESSER | CmpAttr::IS_GREATER | CmpAttr::IS_OVERFLOW | CmpAttr::IS_FLOAT,
+        ))
+    {
         // Skip more complex comparison operations.
         return;
     }

@@ -25,7 +25,7 @@ fn default_instr_limit() -> u64 {
 
 fn default_interrupt_trigger() -> IndexMap<String, Trigger> {
     [("trigger".into(), Trigger {
-        mode: TriggerMode::EveryNthTick(TickKind::Fuzzed.into()),
+        mode: TriggerMode::EveryNthTick(Tick::Number(1000)),
         kind: TriggerKind::Dynamic { fuzz_mode: FuzzMode::Fuzzed },
     })]
     .into_iter()
@@ -97,6 +97,10 @@ pub struct FirmwareConfig {
     #[serde(default)]
     pub patch: IndexMap<u64, ValuePatch>,
 
+    /// Locations to inject code for patching register values.
+    #[serde(default)]
+    pub mem_patch: IndexMap<u64, Vec<u8>>,
+
     /// A mapping from addresses to symbol names that can be used for handlers.
     #[serde(default)]
     pub symbols: IndexMap<u64, String>,
@@ -120,6 +124,7 @@ impl Default for FirmwareConfig {
             handlers: IndexMap::default(),
             exit_at: IndexMap::default(),
             patch: IndexMap::default(),
+            mem_patch: IndexMap::default(),
             symbols: IndexMap::default(),
         }
     }
