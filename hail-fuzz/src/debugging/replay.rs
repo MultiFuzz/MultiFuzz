@@ -315,10 +315,20 @@ impl InputSource {
                     self.path.display()
                 );
 
-                Ok(std::fs::read_dir(&self.path)
+                let mut entries = vec![];
+                for entry in std::fs::read_dir(&self.path)
                     .with_context(|| format!("failed to read: {}", self.path.display()))?
-                    .map(|x| x.map(|x| x.path()))
-                    .collect::<Result<Vec<_>, _>>()?)
+                {
+                    entries.push(
+                        entry?
+                            .path()
+                            .file_name()
+                            .ok_or_else(|| anyhow::format_err!("invalid file name"))?
+                            .into(),
+                    );
+                }
+
+                Ok(entries)
             }
             PathKind::Tar { subpath } => {
                 let subpath = subpath.as_deref().unwrap_or(Path::new(""));

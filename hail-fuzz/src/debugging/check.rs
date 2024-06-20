@@ -70,6 +70,9 @@ pub fn init(vm: &mut Vm) -> anyhow::Result<()> {
         KnownTargets::RiotCcnLiteRelay => {
             let _ = debug_riot_ccn_lite_relay(vm, debug);
         }
+        KnownTargets::RiotGnrcNetworking => {
+            let _ = debug_riot_gnrc_networking(vm, debug);
+        }
     }
 
     Ok(())
@@ -90,6 +93,7 @@ enum KnownTargets {
     XmlParser,
     Lowpan,
     RiotCcnLiteRelay,
+    RiotGnrcNetworking,
 }
 
 impl KnownTargets {
@@ -113,6 +117,7 @@ impl KnownTargets {
             "Robot" => None,
             "Soldering_Iron" => None,
             "ccn-lite-relay" => Some(Self::RiotCcnLiteRelay),
+            "gnrc_networking" => Some(Self::RiotGnrcNetworking),
             _ => None,
         }
     }
@@ -146,7 +151,7 @@ impl DebugConfig {
         if let Some(output) = self.output.as_ref() {
             let mut out = output.lock().unwrap();
             if self.colorize {
-                writeln!(out, "\n\x1b[0;31m{msg}\x1b[0m").unwrap();
+                writeln!(out, "\n\x1b[0;31m[{}] {msg}\x1b[0m", cpu.icount()).unwrap();
             }
             else {
                 out.write_all(msg.as_bytes()).unwrap()
@@ -176,6 +181,7 @@ const UTASKER_USB: u64 = binary_id(UEMU_BASE, 8);
 const XML_PARSER: u64 = binary_id(UEMU_BASE, 9);
 
 const MULTI_FUZZ_BASE: u64 = 0x40000;
+const RIOT_GNRC_NETWORKING: u64 = binary_id(MULTI_FUZZ_BASE, 0);
 const RIOT_CCN_LITE_RELAY: u64 = binary_id(MULTI_FUZZ_BASE, 1);
 
 fn debug_cnc(vm: &mut Vm, debug: DebugConfig) {
@@ -485,26 +491,58 @@ fn debug_riot_ccn_lite_relay(vm: &mut Vm, debug: DebugConfig) -> Option<()> {
         register_write_printer(vm, stdio_write, "r0", "r1");
     }
 
+    let reg_r0 = vm.cpu.arch.sleigh.get_reg("r0").unwrap().var;
+
     // Use after free for interest timeout.
-    const CCNL_FACE_REMOVE_FREE: u64 = 0x16a4e;
+    let ccnl_face_remove_free = vm.env.lookup_symbol("ccnl_face_remove")? + 0xa6;
     let out = debug.clone();
-    vm.hook_address(CCNL_FACE_REMOVE_FREE, move |cpu, _addr| {
+    vm.hook_address(ccnl_face_remove_free, move |cpu, _addr| {
+        let interface = cpu.read_reg(reg_r0);
         out.error(
             cpu,
-            "free called for interface without removing from timer list",
+            &format!("free called for interface ({interface:#x}) without removing from timer list"),
             bug(RIOT_CCN_LITE_RELAY, 0),
         );
     });
 
     // Re-initialization of shared global variable.
-    const CCNL_OPEN_CCNL_START: u64 = 0x1368c;
+    let ccnl_open_ccnl_start = vm.env.lookup_symbol("_ccnl_open")? + 0x3c;
     let out = debug.clone();
-    vm.hook_address(CCNL_OPEN_CCNL_START, move |cpu, _addr| {
+    vm.hook_address(ccnl_open_ccnl_start, move |cpu, _addr| {
         out.error(
             cpu,
             "reinitialization of global variable `ccnl_evtimer`",
             bug(RIOT_CCN_LITE_RELAY, 1),
         );
+    });
+
+    Some(())
+}
+
+fn debug_riot_gnrc_networking(vm: &mut Vm, debug: DebugConfig) -> Option<()> {
+    if debug.output.is_some() {
+        let ssputs_r = vm.env.lookup_symbol("__ssputs_r")?;
+        register_write_printer(vm, ssputs_r, "r2", "r3");
+    }
+
+    let gnrc_icmpv6_echo_build = vm.env.lookup_symbol("gnrc_icmpv6_echo_build")?;
+    let out = debug.clone();
+    vm.hook_address(gnrc_icmpv6_echo_build, move |cpu, _addr| {
+        // Length is the 4th argument
+        let stack = cpu.read_reg(cpu.arch.reg_sp);
+        let Ok(length) = cpu.mem.read_u32(stack, perm::NONE)
+        else {
+            return;
+        };
+
+        // 8 is added the length before it is passed to `gnrc_icmpv6_build`
+        if length.checked_add(8).is_none() {
+            out.error(
+                cpu,
+                &format!("integer overflow in gnrc_icmpv6_build (length={length:#x})"),
+                bug(RIOT_GNRC_NETWORKING, 0),
+            );
+        }
     });
 
     Some(())
