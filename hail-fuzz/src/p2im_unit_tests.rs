@@ -189,12 +189,22 @@ pub fn run(
 
     eprintln!("{successes} successes, {errors} errors");
     for result in output_queue {
-        if let Err(e) = result.result {
-            let binary = groundtruth
-                .iter()
-                .find(|(_, entries)| entries.iter().find(|x| x.line == result.line).is_some())
-                .map_or("<unknown>", |(k, _)| k.as_str());
-            eprintln!("Failed test for {binary} on line {}: {e}", result.line);
+        let binary = groundtruth
+            .iter()
+            .find(|(_, entries)| entries.iter().find(|x| x.line == result.line).is_some())
+            .map_or("<unknown>", |(k, _)| k.as_str());
+
+        match result.result {
+            Ok(info) => {
+                tracing::info!(
+                    "{} satisfies input for {binary} on line {}",
+                    info.display(),
+                    result.line
+                );
+            }
+            Err(e) => {
+                eprintln!("Failed test for {binary} on line {}: {e}", result.line);
+            }
         }
     }
 
