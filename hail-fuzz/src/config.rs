@@ -1,5 +1,5 @@
 use std::{
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{atomic::AtomicBool, Arc},
 };
 
@@ -183,13 +183,29 @@ impl Drop for WorkdirLock {
     }
 }
 
-pub(crate) fn init_workdir(workdir: &Path, resume: bool) -> anyhow::Result<WorkdirLock> {
+#[derive(serde::Serialize)]
+struct HailFuzzSettings {
+    firmware_config: PathBuf,
+    fuzzer_path: PathBuf,
+}
+
+pub(crate) fn init_workdir(config: &Config) -> anyhow::Result<WorkdirLock> {
+    let workdir = &config.workdir;
+
     std::fs::create_dir_all(workdir.join("crashes")).context("Error creating crash directory")?;
     std::fs::create_dir_all(workdir.join("hangs")).context("Error creating hang directory.")?;
 
     let lock = WorkdirLock::new(workdir.join(".lock"))?;
 
-    if !resume {
+    std::fs::write(
+        workdir.join("settings.json"),
+        &serde_json::to_vec_pretty(&HailFuzzSettings {
+            firmware_config: config.firmware.path.clone(),
+            fuzzer_path: std::env::current_exe()?,
+        })?,
+    )?;
+
+    if !config.fuzzer.resume {
         let _ = std::fs::remove_dir_all(workdir.join("queue"));
 
         let stats_path = workdir.join("stats.csv");

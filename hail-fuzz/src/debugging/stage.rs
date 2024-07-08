@@ -14,10 +14,9 @@ use crate::{
 };
 
 pub fn run_stage(config: Config, input_path: &Path, stage: Stage) -> anyhow::Result<()> {
-    let _workdir_lock =
-        config::init_workdir(&config.workdir, config.fuzzer.resume).with_context(|| {
-            format!("Failed to initialize working directory at: {}", config.workdir.display())
-        })?;
+    let _workdir_lock = config::init_workdir(&config).with_context(|| {
+        format!("Failed to initialize working directory at: {}", config.workdir.display())
+    })?;
 
     let mut fuzzer = Fuzzer::new_debug(config)?;
 

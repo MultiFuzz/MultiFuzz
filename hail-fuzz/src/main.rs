@@ -132,10 +132,9 @@ fn run() -> anyhow::Result<()> {
     }
 
     tracing::info!("Starting fuzzer");
-    let _workdir_lock =
-        config::init_workdir(&config.workdir, config.fuzzer.resume).with_context(|| {
-            format!("Failed to initialize working directory at: {}", config.workdir.display())
-        })?;
+    let _workdir_lock = config::init_workdir(&config).with_context(|| {
+        format!("Failed to initialize working directory at: {}", config.workdir.display())
+    })?;
 
     let global_queue = Arc::new(GlobalQueue::init(config.fuzzer.workers as usize));
     if config.fuzzer.resume {

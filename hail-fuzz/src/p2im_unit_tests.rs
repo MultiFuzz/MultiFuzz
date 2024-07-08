@@ -115,7 +115,7 @@ pub fn run(
                             binary.display()
                         );
 
-                        let _workdir_lock = match config::init_workdir(&config.workdir, false) {
+                        let _workdir_lock = match config::init_workdir(&config) {
                             Ok(lock) => lock,
                             Err(e) => {
                                 tracing::warn!(
