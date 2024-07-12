@@ -181,16 +181,30 @@ pub fn from_elf(path: &Path) -> anyhow::Result<FirmwareConfig> {
         let writable = (p_flags & object::elf::PF_W) != 0;
         let executable = (p_flags & object::elf::PF_X) != 0;
 
-        memory.insert(name, Memory {
-            base_addr,
-            permissions: Permissions::new(readable, writable, executable),
-            size: in_memory_size,
-            file,
-            file_offset,
-            file_size: Some(file_size),
-            is_entry: false,
-            ivt_offset: None,
-        });
+        let mem_end = base_addr + in_memory_size;
+        // Check if the newly added memory mapping overlaps with an existing memory region.
+        if let Some((existing_name, existing)) = memory.iter_mut().find(|(_, mem)| {
+            let existing_start = mem.base_addr;
+            let existing_end = mem.base_addr + mem.size;
+            base_addr < existing_end && existing_start < mem_end
+        }) {
+            tracing::warn!("Section {name} overlaps with {existing_name} (automatically merging)");
+            existing.base_addr = existing.base_addr.min(base_addr);
+            existing.size = existing.memory_range().end.max(mem_end) - existing.base_addr
+        }
+        else {
+            memory.insert(name, Memory {
+                base_addr,
+                permissions: Permissions::new(readable, writable, executable),
+                size: in_memory_size,
+                file,
+                file_offset,
+                file_size: Some(file_size),
+                is_entry: false,
+                ivt_offset: None,
+                fill: None,
+            });
+        }
     }
 
     // Attempt to identify the MCU model to avoid needing to edit the config for some well known
