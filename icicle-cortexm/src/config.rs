@@ -380,6 +380,7 @@ pub struct Memory {
     pub file_size: Option<u64>,
     #[serde(default)]
     pub is_entry: bool,
+    pub fill: Option<u8>,
     pub ivt_offset: Option<u64>,
 }
 
@@ -394,6 +395,7 @@ impl Memory {
             file_size: None,
             is_entry: false,
             ivt_offset: None,
+            fill: None,
         }
     }
 

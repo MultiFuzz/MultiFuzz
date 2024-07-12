@@ -135,7 +135,7 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
 
             if !(vm.cpu.mem.map_memory_len(region.base_addr, size, Mapping {
                 perm: region.permissions.0 | perm::INIT,
-                value: 0x0,
+                value: region.fill.unwrap_or(0x0),
             })) {
                 anyhow::bail!("failed to map: {name} at {:#x}", region.base_addr);
             }
