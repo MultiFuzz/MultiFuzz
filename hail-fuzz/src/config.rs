@@ -200,7 +200,7 @@ pub(crate) fn init_workdir(config: &Config) -> anyhow::Result<WorkdirLock> {
     std::fs::write(
         workdir.join("settings.json"),
         &serde_json::to_vec_pretty(&HailFuzzSettings {
-            firmware_config: config.firmware.path.clone(),
+            firmware_config: config.firmware.path.canonicalize()?,
             fuzzer_path: std::env::current_exe()?,
         })?,
     )?;
