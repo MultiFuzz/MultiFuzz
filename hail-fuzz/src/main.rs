@@ -952,6 +952,7 @@ impl<S: StageData> FuzzerStage for S {
     }
 }
 
+#[allow(unused)]
 struct DummyStage;
 
 impl StageData for DummyStage {

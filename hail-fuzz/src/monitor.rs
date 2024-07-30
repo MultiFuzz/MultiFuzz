@@ -182,21 +182,6 @@ impl Monitor {
     }
 }
 
-struct DisplayBytes(usize);
-
-impl std::fmt::Display for DisplayBytes {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        const KB: usize = 1024;
-        const MB: usize = 1024 * 1024;
-
-        match self.0 {
-            x if x < KB => write!(f, "{x} B"),
-            x if x < MB => write!(f, "{:.2} KB", x as f64 / KB as f64),
-            x => write!(f, "{:.2} MB", x as f64 / MB as f64),
-        }
-    }
-}
-
 #[derive(Copy, Clone)]
 pub(crate) struct LocalStats {
     /// The total executions the last time stats were synced.

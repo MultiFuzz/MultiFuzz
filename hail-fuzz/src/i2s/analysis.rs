@@ -297,7 +297,6 @@ impl MinMax {
 
 #[derive(Debug)]
 pub struct ArrayInfo {
-    pub incrementing: Option<usize>,
     pub is_ascii: bool,
     pub null_terminated: bool,
     pub prefix_match: usize,
@@ -305,7 +304,7 @@ pub struct ArrayInfo {
 
 impl ArrayInfo {
     pub fn new() -> Self {
-        Self { incrementing: None, is_ascii: true, null_terminated: true, prefix_match: 0 }
+        Self { is_ascii: true, null_terminated: true, prefix_match: 0 }
     }
 
     pub fn from_sequence<'a>(sequence: impl Iterator<Item = &'a [u8]> + Clone) -> Self {
