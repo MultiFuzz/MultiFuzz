@@ -75,48 +75,6 @@
 
 #define __CORTEX_M                (3U)                                   /*!< Cortex-M Core */
 
-/** __FPU_USED indicates whether an FPU is used or not.
-    This core does not support an FPU at all
-*/
-#define __FPU_USED       0U
-
-#if defined ( __CC_ARM )
-  #if defined __TARGET_FPU_VFP
-    #error "Compiler generates FPU instructions for a device without an FPU (check __FPU_PRESENT)"
-  #endif
-
-#elif defined (__ARMCC_VERSION) && (__ARMCC_VERSION >= 6010050)
-  #if defined __ARM_FP
-    #error "Compiler generates FPU instructions for a device without an FPU (check __FPU_PRESENT)"
-  #endif
-
-#elif defined ( __GNUC__ )
-  #if defined (__VFP_FP__) && !defined(__SOFTFP__)
-    #error "Compiler generates FPU instructions for a device without an FPU (check __FPU_PRESENT)"
-  #endif
-
-#elif defined ( __ICCARM__ )
-  #if defined __ARMVFP__
-    #error "Compiler generates FPU instructions for a device without an FPU (check __FPU_PRESENT)"
-  #endif
-
-#elif defined ( __TI_ARM__ )
-  #if defined __TI_VFP_SUPPORT__
-    #error "Compiler generates FPU instructions for a device without an FPU (check __FPU_PRESENT)"
-  #endif
-
-#elif defined ( __TASKING__ )
-  #if defined __FPU_VFP__
-    #error "Compiler generates FPU instructions for a device without an FPU (check __FPU_PRESENT)"
-  #endif
-
-#elif defined ( __CSMC__ )
-  #if ( __CSMC__ & 0x400U)
-    #error "Compiler generates FPU instructions for a device without an FPU (check __FPU_PRESENT)"
-  #endif
-
-#endif
-
 // #include "cmsis_compiler.h"               /* CMSIS compiler specific defines */
 
 
