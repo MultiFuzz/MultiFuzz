@@ -416,7 +416,7 @@ pub unsafe extern "C" fn timer_expired(ctx: *mut c_void, number: i32, timer: *mu
 }
 
 /// A magic location used for reading other data from the fuzzer (that is not a valid MMIO address).
-const IRQ_NUMBER_ADDR: u64 = 0xaaaa_aaa0;
+pub const IRQ_NUMBER_ADDR: u64 = 0xaaaa_aaa0;
 
 pub unsafe extern "C" fn get_next_irq_number(ctx: *mut c_void, number: *mut u8) -> bool {
     let ctx = &mut *ctx.cast::<Context>();
@@ -433,7 +433,7 @@ pub unsafe extern "C" fn get_next_irq_number(ctx: *mut c_void, number: *mut u8) 
 }
 
 /// The location to read timer choices from
-const TIMER_CHOICE_ADDR: u64 = IRQ_NUMBER_ADDR + 4;
+pub const TIMER_CHOICE_ADDR: u64 = IRQ_NUMBER_ADDR + 4;
 
 pub unsafe extern "C" fn get_next_timer_choice(ctx: *mut c_void, choice: *mut u8) -> bool {
     let ctx = &mut *ctx.cast::<Context>();

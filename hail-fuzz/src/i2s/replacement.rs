@@ -15,6 +15,11 @@ use crate::{
     Fuzzer, FuzzerStage, Snapshot, StageExit, StageStartError,
 };
 
+/// Streams related to interrupts should not be used for i2s replacement.
+fn is_interrupt_stream(addr: u64) -> bool {
+    addr == icicle_cortexm::IRQ_NUMBER_ADDR || addr == icicle_cortexm::TIMER_CHOICE_ADDR
+}
+
 pub(crate) struct I2SRandomReplacement {
     comparisons: Comparisons,
     finder: ReplacementFinder,
@@ -41,7 +46,8 @@ impl I2SRandomReplacement {
             }
         }
 
-        let streams = get_non_empty_streams(&fuzzer.state.input);
+        let mut streams = get_non_empty_streams(&fuzzer.state.input);
+        streams.retain(|&(addr, _)| !is_interrupt_stream(addr));
         let stream_distr = get_stream_weights(fuzzer, input_id, &streams);
 
         Some(Self { comparisons, finder: ReplacementFinder::default(), streams, stream_distr })
@@ -206,6 +212,10 @@ impl I2SReplaceStage {
 
             let (stream_key, dst) =
                 fuzzer.state.input.streams.iter().nth(self.cursor.stream).unwrap();
+
+            if is_interrupt_stream(*stream_key) {
+                self.cursor.stream += 1;
+            }
 
             self.cursor.finder.offset =
                 self.cursor.finder.offset.max(dst.bytes.len().saturating_sub(MAX_STREAM_LEN));

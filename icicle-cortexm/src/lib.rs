@@ -10,6 +10,7 @@ use std::{cell::UnsafeCell, os::raw::c_void, path::PathBuf};
 
 use anyhow::Context as _;
 use hashbrown::HashMap;
+use icicle_fuzzing::parse_addr_or_symbol;
 use icicle_vm::{
     cpu::{
         debug_info::{DebugInfo, SourceLocation},
@@ -25,6 +26,7 @@ use crate::{
     mmio::FuzzwareMmioHandler,
     unicorn_api::{map_uc_err, Context},
 };
+pub use unicorn_api::{IRQ_NUMBER_ADDR, TIMER_CHOICE_ADDR};
 
 pub struct CortexmTarget<T> {
     pub mmio_handler: Option<IoHandler>,
@@ -302,14 +304,15 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
             }));
         }
         for (symbol, handler) in &config.handlers {
-            let Some(addr) = lookup_table.get(symbol)
+            let Some(addr) =
+                lookup_table.get(symbol).copied().or_else(|| parse_addr_or_symbol(&symbol, vm))
             else {
                 tracing::error!("Failed to resolve address of: {symbol}");
                 continue;
             };
             match handler.as_deref() {
-                Some("ignore") | None => ignore.push(*addr),
-                Some("crash") => crash_at.push(*addr),
+                Some("ignore") | None => ignore.push(addr),
+                Some("crash") => crash_at.push(addr),
                 Some(unknown) => anyhow::bail!("unsupported handler type for {symbol}: {unknown}"),
             }
         }
