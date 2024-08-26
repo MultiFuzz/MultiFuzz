@@ -48,6 +48,9 @@ impl I2SRandomReplacement {
 
         let mut streams = get_non_empty_streams(&fuzzer.state.input);
         streams.retain(|&(addr, _)| !is_interrupt_stream(addr));
+        if streams.is_empty() {
+            return None;
+        }
         let stream_distr = get_stream_weights(fuzzer, input_id, &streams);
 
         Some(Self { comparisons, finder: ReplacementFinder::default(), streams, stream_distr })
