@@ -93,6 +93,10 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
         let nvic_enabled = config.use_systick || config.use_nvic;
         let nvic_handler = vm.cpu.mem.register_io_handler(FuzzwareNvicHandler { uc: uc_ptr });
 
+        // Keeps track of best file to use for loading debug info from. Note: currently we only
+        // support loading debug info from a single ELF file.
+        let mut debug_info_path = None;
+
         for (name, region) in &config.memory_map {
             tracing::info!(
                 "mapping {name} at {:#x} (size: {:#x}) perms: {:?}",
@@ -156,10 +160,8 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
                 }
                 .with_context(|| format!("error writing {file}"))?;
 
-                // Set debug info if we find an .elf in the same directory.
-                let debug_info_path = path.with_extension("elf");
-                if region.is_entry && debug_info_path.exists() {
-                    vm.env_mut::<FuzzwareEnvironment>().unwrap().set_debug_info(debug_info_path)?;
+                if debug_info_path.is_none() || region.is_entry {
+                    debug_info_path = find_elf_for_path(path);
                 }
             }
 
@@ -167,6 +169,10 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
                 vtor = Some(region.base_addr);
                 entry_image_base = Some(region.base_addr + region.ivt_offset.unwrap_or(0));
             }
+        }
+
+        if let Some(path) = debug_info_path {
+            vm.env_mut::<FuzzwareEnvironment>().unwrap().set_debug_info(path)?;
         }
 
         let (vtor, base_addr) = match (vtor, entry_image_base) {
@@ -367,6 +373,19 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
 
         Ok(())
     }
+}
+
+/// Attempts to find an ELF binary with the same base name as target path to load debug info from.
+fn find_elf_for_path(path: PathBuf) -> Option<PathBuf> {
+    let elf_path = path.with_extension("elf");
+    if elf_path.exists() {
+        return Some(elf_path);
+    }
+    let out_path = path.with_extension("out");
+    if out_path.exists() {
+        return Some(out_path);
+    }
+    None
 }
 
 fn write_raw_bytes(
