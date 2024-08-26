@@ -126,7 +126,7 @@ fn write_err_to_uc_err(err: icicle_vm::cpu::mem::MemError) -> uc_err {
 }
 
 pub unsafe extern "C" fn emu_stop(ctx: *mut c_void, exit: uc_err) -> uc_err {
-    tracing::debug!("icicle_unicorn_api::emu_stop");
+    tracing::debug!("emu_stop({})", fuzzware::uc_error_str(exit));
     let ctx = &mut *ctx.cast::<Context>();
     let vm = unsafe { &mut *ctx.vm };
 

@@ -150,20 +150,11 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
 
                 let data = std::fs::read(&path)
                     .with_context(|| format!("failed to read {file} ({})", path.display()))?;
-                let bytes = &data[region.file_offset as usize..];
-
-                // If file size was not specified, assume it matches the size of the full region.
-                let file_size = region.file_size.unwrap_or(region.size) as usize;
-                let len = usize::min(bytes.len(), file_size);
-                if let Err(e) =
-                    vm.cpu.mem.write_bytes_large(region.base_addr, &bytes[..len], perm::NONE)
-                {
-                    anyhow::bail!(
-                        "failed to write {len:#x} bytes from {file} (offset = {:#x}) to {:#x}: {e}",
-                        region.file_offset,
-                        region.base_addr
-                    );
+                match path.extension().map_or(false, |x| x == "hex") {
+                    true => write_ihex_bytes(vm, region, &data),
+                    false => write_raw_bytes(vm, region, &data),
                 }
+                .with_context(|| format!("error writing {file}"))?;
 
                 // Set debug info if we find an .elf in the same directory.
                 let debug_info_path = path.with_extension("elf");
@@ -376,6 +367,59 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
 
         Ok(())
     }
+}
+
+fn write_raw_bytes(
+    vm: &mut icicle_vm::Vm,
+    region: &config::Memory,
+    data: &[u8],
+) -> anyhow::Result<()> {
+    let bytes = &data[region.file_offset as usize..];
+
+    // If file size was not specified, assume it matches the size of the full region.
+    let file_size = region.file_size.unwrap_or(region.size) as usize;
+    let len = usize::min(bytes.len(), file_size);
+    vm.cpu.mem.write_bytes_large(region.base_addr, &bytes[..len], perm::NONE).map_err(|e| {
+        anyhow::format_err!(
+            "failed to write {len:#x} bytes (offset = {:#x}) to {:#x}: {e}",
+            region.file_offset,
+            region.base_addr
+        )
+    })
+}
+
+fn write_ihex_bytes(
+    vm: &mut icicle_vm::Vm,
+    region: &config::Memory,
+    data: &[u8],
+) -> anyhow::Result<()> {
+    let input =
+        std::str::from_utf8(&data).map_err(|e| anyhow::format_err!("invalid ihex file: {e}"))?;
+
+    let reader = ihex::Reader::new(input);
+    let mut base_addr = region.base_addr;
+    for entry in reader {
+        match entry.map_err(|e| anyhow::format_err!("invalid ihex file: {e}"))? {
+            ihex::Record::Data { offset, value } => {
+                let addr = base_addr + offset as u64;
+                vm.cpu.mem.write_bytes(addr, &value, perm::NONE).map_err(|e| {
+                    anyhow::format_err!("failed to write to memory at {addr:#0x}: {e}")
+                })?;
+                let perm = region.permissions.0;
+                vm.cpu.mem.update_perm(addr, value.len() as u64, perm).map_err(|e| {
+                    anyhow::format_err!("failed to update permissions at {addr:#0x}: {e}")
+                })?;
+            }
+            ihex::Record::StartLinearAddress(addr) => base_addr = addr as u64,
+            ihex::Record::ExtendedLinearAddress(upper_addr) => {
+                base_addr = (base_addr & 0xffff) | ((upper_addr as u64) << 16);
+            }
+            ihex::Record::EndOfFile => break,
+            other => anyhow::bail!("Unsupported ihex record: {other:x?}"),
+        }
+    }
+
+    Ok(())
 }
 
 impl<T> icicle_fuzzing::Runnable for CortexmTarget<T> {

@@ -616,6 +616,7 @@ dependencies = [
  "hashbrown 0.14.5",
  "icicle-fuzzing",
  "icicle-vm",
+ "ihex",
  "indexmap",
  "object",
  "pcode",
