@@ -10,7 +10,7 @@ use std::{cell::UnsafeCell, os::raw::c_void, path::PathBuf};
 
 use anyhow::Context as _;
 use hashbrown::HashMap;
-use icicle_fuzzing::parse_addr_or_symbol;
+use icicle_fuzzing::{parse_addr_or_symbol, parse_u64_with_prefix};
 use icicle_vm::{
     cpu::{
         debug_info::{DebugInfo, SourceLocation},
@@ -330,16 +330,17 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
         let mut exit_at = vec![];
         let mut hang_at = vec![];
         for (symbol, handler) in &config.exit_at {
-            let Some(addr) = lookup_table.get(symbol)
+            let Some(addr) =
+                lookup_table.get(symbol).copied().or_else(|| parse_u64_with_prefix(&symbol))
             else {
                 tracing::error!("Failed to resolve address of: {symbol}");
                 continue;
             };
 
             match handler.as_ref().map(|x| x.as_str()) {
-                Some("hang") => hang_at.push(*addr),
+                Some("hang") => hang_at.push(addr),
                 Some(unknown) => anyhow::bail!("Unknown handler for exit_at {symbol}: {unknown}"),
-                None => exit_at.push(*addr),
+                None => exit_at.push(addr),
             }
         }
 
