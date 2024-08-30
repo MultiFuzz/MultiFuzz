@@ -271,6 +271,11 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
                     None => config.nvic.disabled_irqs.clone(),
                 };
                 tracing::info!("Disabled interrupts = {disabled_interrupts:?}");
+                tracing::info!(
+                    "Nested interrupts = {}, Pend interrupts while in IRQ = {}",
+                    config.nvic.enable_nested_interrupts,
+                    config.nvic.allow_active_interrupt_pending
+                );
                 map_uc_err(fuzzware::init_nvic(
                     uc_ptr,
                     vtor as u32,
