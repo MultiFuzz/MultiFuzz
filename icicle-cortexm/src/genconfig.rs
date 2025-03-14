@@ -6,7 +6,7 @@ use std::{
 use anyhow::Context;
 use indexmap::IndexMap;
 use object::{
-    read::elf::{FileHeader, ProgramHeader},
+    read::elf::{FileHeader, ProgramHeader, SectionHeader},
     Endianness, Object, ObjectSection, ObjectSymbol,
 };
 
@@ -247,14 +247,35 @@ pub fn from_elf(path: &Path) -> anyhow::Result<FirmwareConfig> {
     }
 
     if !found_ivt {
-        // Try to find a region containing the program entry point.
-        let entry_point = (elf.e_entry.get(endian) & !1) as u64;
-        let ivt_section = memory
-            .values_mut()
-            .find(|info| info.memory_range().contains(&entry_point))
-            .ok_or_else(|| anyhow::format_err!("Failed to find section containing entry point"))?;
-        ivt_section.is_entry = true;
-        ivt_section.ivt_offset = Some(0);
+        // Try to infer IVT location from the .text section.
+        if let Some(text_section) = elf.section_headers(endian, data.as_slice())?.iter().find(|x| {
+            match x.strings(endian, data.as_slice()) {
+                Ok(Some(strings)) => x.name(endian, strings).map_or(false, |x| x == b".text"),
+                _ => false,
+            }
+        }) {
+            let text_addr = text_section.sh_addr(endian) as u64;
+            let ivt_section = memory
+                .values_mut()
+                .find(|info| info.memory_range().contains(&text_addr))
+                .ok_or_else(|| {
+                    anyhow::format_err!("Failed to find section containing entry point")
+                })?;
+            ivt_section.is_entry = true;
+            ivt_section.ivt_offset = Some(text_addr.saturating_sub(ivt_section.base_addr));
+        }
+        else {
+            // Try to find a region containing the program entry point.
+            let entry_point = (elf.e_entry.get(endian) & !1) as u64;
+            let ivt_section = memory
+                .values_mut()
+                .find(|info| info.memory_range().contains(&entry_point))
+                .ok_or_else(|| {
+                    anyhow::format_err!("Failed to find section containing entry point")
+                })?;
+            ivt_section.is_entry = true;
+            ivt_section.ivt_offset = Some(0);
+        }
     };
 
     if is_nrf_target {

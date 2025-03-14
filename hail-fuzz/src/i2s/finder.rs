@@ -1,11 +1,11 @@
 use icicle_vm::VmExit;
-use rand::{seq::SliceRandom, Rng};
+use rand::{Rng, seq::SliceRandom};
 
 use crate::{
+    Fuzzer,
     i2s::analysis::{add_interesting_call_cmps, add_interesting_inst_cmps},
     input::StreamData,
     utils::insert_slice,
-    Fuzzer,
 };
 
 /// Capture all the comparisons discovered by executing the current input.
@@ -200,15 +200,26 @@ pub(crate) struct CmpCursor {
     pub offset: usize,
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub(crate) struct ReplacementFinder {
     pub offset: usize,
     pub replacement: Vec<u8>,
     pub extended_replacement: Vec<u8>,
     pub stride: u8,
+    match_strided_ints: bool,
 }
 
 impl ReplacementFinder {
+    pub(crate) fn new(match_strided_ints: bool) -> Self {
+        Self {
+            match_strided_ints,
+            offset: 0,
+            replacement: Vec::new(),
+            extended_replacement: Vec::new(),
+            stride: 1,
+        }
+    }
+
     pub(crate) fn reset(&mut self, offset: usize) {
         self.offset = offset;
         self.replacement.clear();
@@ -240,7 +251,7 @@ impl ReplacementFinder {
     }
 
     pub(crate) fn apply_replacement(&mut self, dst: &mut Vec<u8>) {
-        if self.extended_replacement.len() < self.replacement.len() {
+        if self.extended_replacement.len() <= self.replacement.len() {
             self.apply_replacement_simple(dst)
         }
         self.apply_replacement_extended(dst)
@@ -250,25 +261,36 @@ impl ReplacementFinder {
         self.replacement.clear();
         self.extended_replacement.clear();
         self.stride = 1;
-        let bytes = &target.bytes;
         match operands {
-            Operands::U8(a, b) => self.find_exact_match(bytes, a.to_ne_bytes(), b.to_ne_bytes()),
-            Operands::U16(a, b) => self.find_exact_match(bytes, a.to_ne_bytes(), b.to_ne_bytes()),
-            Operands::U32(a, b) => self.find_exact_match(bytes, a.to_ne_bytes(), b.to_ne_bytes()),
-            Operands::U64(a, b) => self.find_exact_match(bytes, a.to_ne_bytes(), b.to_ne_bytes()),
+            Operands::U8(a, b) => self.find_int_match(target, a.to_ne_bytes(), b.to_ne_bytes()),
+            Operands::U16(a, b) => self.find_int_match(target, a.to_ne_bytes(), b.to_ne_bytes()),
+            Operands::U32(a, b) => self.find_int_match(target, a.to_ne_bytes(), b.to_ne_bytes()),
+            Operands::U64(a, b) => self.find_int_match(target, a.to_ne_bytes(), b.to_ne_bytes()),
             Operands::Bytes(a, b) => self.find_prefix_match(target, a, b),
         }
+    }
+
+    fn find_int_match<const N: usize>(
+        &mut self,
+        target: &StreamData,
+        v0: [u8; N],
+        v1: [u8; N],
+    ) -> bool {
+        let start = self.offset;
+        if self.find_full_match(&target.bytes, v0, v1) {
+            return true;
+        }
+        if N > 1 && self.match_strided_ints {
+            self.offset = start;
+            return self.find_prefix_match(target, &v0, &v1);
+        }
+        false
     }
 
     /// Starting from the current offset find the next loction in `dst` that matches one of the
     /// operands in `v`. If a match is found, `true` is returned and the other operand can be
     /// applied using [Self::apply_replacement].
-    fn find_exact_match<const N: usize>(
-        &mut self,
-        target: &[u8],
-        v0: [u8; N],
-        v1: [u8; N],
-    ) -> bool {
+    fn find_full_match<const N: usize>(&mut self, target: &[u8], v0: [u8; N], v1: [u8; N]) -> bool {
         if target.len() < N {
             return false;
         }
@@ -434,8 +456,8 @@ fn either_prefix_match(target: &[u8], a: &[u8], b: &[u8]) -> PrefixMatch {
     }
 }
 
-fn strided_prefix_match<const N: usize>(target: &[u8], x: &[u8]) -> usize {
-    target.chunks_exact(N).zip(x).take_while(|(target, x)| target[0] == **x).count()
+fn strided_prefix_match<const S: usize>(target: &[u8], x: &[u8]) -> usize {
+    target.chunks_exact(S).zip(x).take_while(|(target, x)| target[0] == **x).count()
 }
 
 /// Checks whether `target` shares a common prefix with either `a` or `b`. Returns the length of the
@@ -466,4 +488,56 @@ fn test_strided_prefix_match() {
         0x70, 0x0a, 0x00,
     ];
     assert_eq!(strided_prefix_match::<4>(&a[..], &b[..]), 17);
+}
+
+#[test]
+fn test_stride_on_u16() {
+    let bytes = &[
+        0x00, 0x89, 0xb0, 0x33, 0x14, 0x98, 0x38, 0x44, 0x0e, 0xfe, 0xf3, 0x4a, 0x38, 0x5c, 0x3d,
+        0xa5, 0xea, 0xd9, 0x15, 0xf2, 0x8f, 0xde, 0xd7, 0xeb, 0x24, 0x91, 0xcb, 0x9e, 0x2d, 0xbe,
+        0xfe, 0x81,
+    ];
+    let stream_data = StreamData { bytes: bytes.to_vec(), cursor: 0, sizes: 2 | 4 };
+
+    let v0 = 0xea38_u16;
+    let v1 = 0x000a_u16;
+
+    let mut finder = ReplacementFinder::new(true);
+    assert!(finder.find_prefix_match::<2>(&stream_data, &v0.to_le_bytes(), &v1.to_le_bytes()));
+    eprintln!("replacement: {:?}, stride={}\n\n", finder.replacement, finder.stride);
+
+    finder.reset(0);
+    finder.find_best_prefix_match::<2>(&stream_data, &v0.to_le_bytes(), &v1.to_le_bytes());
+    eprintln!("replacement: {:?}, stride={}\n\n", finder.replacement, finder.stride);
+
+    finder.reset(0);
+    assert!(finder.find_match(&stream_data, Operands::U16(v0, v1)));
+}
+
+#[test]
+fn test_stride_on_u32_underaligned() {
+    #[rustfmt::skip]
+    let bytes = &[
+        0xf8, 0x0d, 0x1b, 0xa4,
+        0xed, 0xec, 0x1e, 0x5c,
+        0xa5, 0xf6, 0x05, 0x20,
+        0xdb, 0x04, 0x00, 0x80,
+
+        0x6f, 0xcd, 0x13, 0x81,
+        0x3d, 0xec, 0x9d, 0xf7,
+        0x1c, 0x53, 0x4c, 0x6b, // (0x4c) first byte of target
+        0x38, 0x45, 0xdf, 0xf2, // (0xdf) second byte of target
+        0x43, 0x0d
+    ];
+
+    let stream_data = StreamData { bytes: bytes.to_vec(), cursor: 0, sizes: 2 | 4 };
+    let v0 = 0xdf4c_u16;
+    let v1 = 0x0002_u16;
+
+    let mut finder = ReplacementFinder::new(true);
+    assert!(finder.find_int_match(&stream_data, v0.to_ne_bytes(), v1.to_ne_bytes()));
+
+    assert!(finder.stride == 4);
+    assert_eq!(finder.offset, 26);
+    assert_eq!(finder.replacement, [0x02, 0x00])
 }

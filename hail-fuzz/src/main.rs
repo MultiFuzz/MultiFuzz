@@ -23,7 +23,7 @@ use std::{
 };
 
 use anyhow::Context;
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 use icicle_cortexm::{config::FirmwareConfig, genconfig, CortexmTarget};
 use icicle_fuzzing::{
     cmplog2::CmpLog2Ref, parse_u64_with_prefix, utils::BlockCoverageTracker, CoverageMode,
@@ -207,7 +207,8 @@ fn fuzzing_loop(mut fuzzer: Fuzzer, run_for: Option<Duration>) -> anyhow::Result
     while !fuzzer.vm.interrupt_flag.load(std::sync::atomic::Ordering::Relaxed)
         && run_for.map_or(true, |t| start_time.elapsed() < t)
     {
-        fuzzer.input_id = fuzzer.queue.next_input();
+        fuzzer.state.reset();
+        fuzzer.input_id = fuzzer.queue.next_input(&fuzzer.corpus);
 
         // Default to a very high length extension probability for randomly generated inputs. This
         // is overwritten if we are using an input from the corpus.
@@ -244,9 +245,12 @@ fn fuzzing_loop(mut fuzzer: Fuzzer, run_for: Option<Duration>) -> anyhow::Result
                     fuzzer.corpus[id].stage_data.entry(Stage::InputToState)
                 {
                     slot.insert(Box::new(()));
-                    tracing::debug!("[{id}] running colorization stage");
-                    fuzzer.stage = Stage::Colorization;
-                    i2s::ColorizationStage::run(&mut fuzzer, &mut stats)?;
+
+                    if fuzzer.features.colorization {
+                        tracing::debug!("[{id}] running colorization stage");
+                        fuzzer.stage = Stage::Colorization;
+                        i2s::ColorizationStage::run(&mut fuzzer, &mut stats)?;
+                    }
 
                     tracing::debug!("[{id}] running I2S stage");
                     fuzzer.stage = Stage::InputToState;
@@ -276,8 +280,8 @@ fn fuzzing_loop(mut fuzzer: Fuzzer, run_for: Option<Duration>) -> anyhow::Result
         };
 
         match stage_exit {
-            StageExit::Finished => {}
-            StageExit::Error | StageExit::Interrupted => break,
+            StageExit::Skip => {}
+            StageExit::Unknown(_) | StageExit::Interrupted => break,
             StageExit::Unsupported => {}
         }
 
@@ -291,7 +295,7 @@ fn fuzzing_loop(mut fuzzer: Fuzzer, run_for: Option<Duration>) -> anyhow::Result
         }
 
         fuzzer.stage = Stage::Import;
-        if SyncStage::run(&mut fuzzer, &mut stats)? == StageExit::Interrupted {
+        if matches!(SyncStage::run(&mut fuzzer, &mut stats)?, StageExit::Interrupted) {
             break;
         }
     }
@@ -352,10 +356,6 @@ pub struct State {
     pub exit_address: u64,
     /// Did coverage increase after executing the current test case?
     pub new_coverage: bool,
-    /// Did the input crash?
-    pub was_crash: bool,
-    /// Did the input hang?
-    pub was_hang: bool,
     /// The time it took to execute the input.
     pub exec_time: Duration,
     /// The icount after the fuzzer finished executing the input.
@@ -378,12 +378,17 @@ impl State {
         self.exit = VmExit::Running;
         self.exit_address = 0;
         self.new_coverage = false;
-        self.was_crash = false;
-        self.was_hang = false;
         self.exec_time = Duration::ZERO;
         self.instructions = 0;
         self.coverage_bits = 0;
         self.hit_coverage.clear();
+    }
+
+    pub fn was_crash(&self) -> bool {
+        CrashKind::from(self.exit).is_crash()
+    }
+    pub fn was_hang(&self) -> bool {
+        CrashKind::from(self.exit).is_hang()
     }
 }
 
@@ -403,12 +408,14 @@ impl Snapshot {
         }
     }
 
+    #[allow(unused)]
     pub fn restore(&self, fuzzer: &mut Fuzzer) {
         fuzzer.coverage.restore_local(&mut fuzzer.vm, &self.coverage);
         fuzzer.vm.restore(&self.vm);
         if let Some(x) = fuzzer.path_tracer {
             x.restore(&mut fuzzer.vm, self.tracer.as_ref().unwrap());
         }
+        fuzzer.vm.cpu.mem.mapping_changed = false;
     }
 
     pub fn restore_initial(fuzzer: &mut Fuzzer) {
@@ -417,6 +424,17 @@ impl Snapshot {
         if let Some(x) = fuzzer.path_tracer {
             x.restore(&mut fuzzer.vm, fuzzer.snapshot.tracer.as_ref().unwrap());
         }
+        fuzzer.vm.cpu.mem.mapping_changed = false;
+    }
+
+    pub fn restore_prefix(fuzzer: &mut Fuzzer) {
+        let snapshot = fuzzer.prefix_snapshot.as_ref().unwrap();
+        fuzzer.coverage.restore_local(&mut fuzzer.vm, &snapshot.coverage);
+        fuzzer.vm.restore(&snapshot.vm);
+        if let Some(x) = fuzzer.path_tracer {
+            x.restore(&mut fuzzer.vm, snapshot.tracer.as_ref().unwrap());
+        }
+        fuzzer.vm.cpu.mem.mapping_changed = false;
     }
 }
 
@@ -459,8 +477,10 @@ pub(crate) struct Fuzzer {
     pub target: CortexmMultiStream,
     /// Random number source for the fuzzer..
     pub rng: SmallRng,
-    /// The snapshot to restore from when running a new test case.
+    /// The root-level snapshot to restore from when running a new test case.
     pub snapshot: Snapshot,
+    /// A snapshot corresponding to the execution from a prefix.
+    pub prefix_snapshot: Option<Snapshot>,
     /// The current fuzzing stage.
     pub stage: Stage,
     /// A storage location for test cases.
@@ -486,6 +506,9 @@ pub(crate) struct Fuzzer {
     /// The blocks seen by the fuzzer with the number of executions and input ID corresponding to
     /// when the first input reaching that block was found.
     pub seen_blocks: BlockCoverageTracker,
+    /// Keeps track of bits (by index) in the coverage bitmap found by crashes before regular
+    /// inputs.
+    pub crash_coverage_bits: HashSet<u32>,
     /// The total number of executions performed by this fuzzing instance.
     pub execs: u64,
     /// The number of execs were were at the last time we found an interesting input.
@@ -516,6 +539,7 @@ impl Fuzzer {
 
     pub fn new(mut config: Config, global: GlobalRef) -> anyhow::Result<Self> {
         let features = config::EnabledFeatures::from_env()?;
+        eprintln!("HailFuzz start with features: {features:?}");
         let (mut target, mut vm) = setup_vm(&mut config, &features)?;
         icicle_fuzzing::add_debug_instrumentation(&mut vm);
 
@@ -589,6 +613,7 @@ impl Fuzzer {
             vm,
             target,
             snapshot,
+            prefix_snapshot: None,
             queue: CoverageQueue::new(),
             stage: Stage::MultiStreamExtend,
             rng,
@@ -602,6 +627,7 @@ impl Fuzzer {
             path_tracer,
             cmplog,
             seen_blocks: BlockCoverageTracker::new(),
+            crash_coverage_bits: HashSet::new(),
             execs: 0,
             last_find: 0,
             dict: HashMap::new(),
@@ -634,23 +660,36 @@ impl Fuzzer {
     pub fn execute_with_limit(&mut self, limit: u64) -> Option<VmExit> {
         let exec_start = std::time::Instant::now();
 
+        let old_limit = self.vm.icount_limit;
         self.vm.icount_limit = limit;
         if let Some(cmplog) = self.cmplog {
             cmplog.clear_data(&mut self.vm.cpu);
         }
         let exit = self.target.run(&mut self.vm).unwrap();
+        self.vm.icount_limit = old_limit;
         self.execs += 1;
 
         self.state.exec_time = exec_start.elapsed();
         self.state.instructions = self.vm.cpu.icount();
         self.state.exit = exit;
+        self.state.exit_address = self.vm.cpu.read_pc();
 
         if matches!(exit, VmExit::Interrupted) {
             return None;
         }
 
         if self.global.is_main_instance() {
-            self.seen_blocks.add_new(&self.vm.code, self.corpus.inputs() as u64);
+            let new_blocks = self.seen_blocks.add_new(&self.vm.code, self.corpus.inputs() as u64);
+            if self.features.dump_jit_mapping && new_blocks {
+                if let Err(e) = self
+                    .vm
+                    .jit
+                    .dump_jit_mapping("jit_table.txt".as_ref(), self.vm.env.debug_info().unwrap())
+                {
+                    tracing::warn!("Failed to dump JIT table: {e}")
+                }
+            }
+
             if let Err(e) = self.seen_blocks.maybe_save(&self.workdir.join("cur_coverage.txt")) {
                 tracing::error!("error saving coverage file: {e:?}");
             }
@@ -668,24 +707,34 @@ impl Fuzzer {
             return Ok(());
         }
 
-        self.state.exit_address = self.vm.cpu.read_pc();
         let crash_kind = CrashKind::from(exit);
+
+        self.state.new_bits = self.coverage.new_bits(&mut self.vm);
+        self.state.new_coverage = !self.state.new_bits.is_empty();
+        if self.state.new_coverage {
+            let bits = self.coverage.get_bits(&mut self.vm);
+            self.state.coverage_bits = count_all_bits(bits);
+            self.state.hit_coverage = coverage::bit_iter(bits).map(|x| x as u32).collect();
+
+            if tracing::enabled!(tracing::Level::TRACE) {
+                self.trace_new_bits();
+            }
+        }
+
         // Update coverage map if the input was non-crashing.
         //
         // Note: we intentionally save hangs here since we observe frequent hangs that reach new
         // coverage due to the nature of the hang heuristics.
         if !crash_kind.is_crash() {
-            self.state.new_bits = self.coverage.new_bits(&mut self.vm);
-            self.state.new_coverage = !self.state.new_bits.is_empty();
-
             if self.state.new_coverage {
                 if config::VALIDATE {
-                    debugging::validate_last_exec(self, 0, exit);
+                    debugging::validate_last_exec(self, exit);
                 }
-                let bits = self.coverage.get_bits(&mut self.vm);
-                self.state.coverage_bits = count_all_bits(bits);
-                self.state.hit_coverage = coverage::bit_iter(bits).map(|x| x as u32).collect();
                 self.coverage.merge(&mut self.vm);
+                self.state
+                    .hit_coverage
+                    .iter()
+                    .for_each(|bit| _ = self.crash_coverage_bits.remove(bit));
                 tracing::debug!("{} bits set in coverage map", self.coverage.count());
             }
             else if self.features.add_favored_inputs
@@ -703,24 +752,36 @@ impl Fuzzer {
             }
 
             if let Some(input_id) = self.queue.add_if_interesting(&mut self.corpus, &self.state) {
-                tracing::trace!("saved input {input_id} with: {:?} set", self.state.new_bits);
                 self.update_input_metadata(input_id);
                 self.last_find = self.execs;
+            }
+        }
+        else {
+            // If a crashing input contains unseen coverage, keep track of it in the input corpus
+            // but mark it as crashing and do not update the coverage bitmap and queue (because we
+            // want find & save a non-crashing seed to continue with).
+            //
+            // This is useful for identifying blocks only reachable by crashes.
+            if self.state.new_coverage {
+                let mut new_coverage = false;
+                for bit in &self.state.new_bits {
+                    new_coverage |= self.crash_coverage_bits.insert(*bit);
+                }
+                if new_coverage {
+                    let input_id = self.corpus.add(&self.state);
+                    self.update_input_metadata(input_id);
+                }
             }
         }
 
         // Clear logged mutation events.
         self.state.mutation_kinds.clear();
 
-        match crash_kind {
-            CrashKind::Halt => return Ok(()),
-            CrashKind::Hang => self.state.was_hang = true,
-            _ => self.state.was_crash = true,
+        if matches!(crash_kind, CrashKind::Halt) {
+            return Ok(());
         }
 
-        let is_locally_unique = self.crash_logger.is_new(&mut self.vm, exit);
-        if is_locally_unique {
-            let key = icicle_fuzzing::gen_crash_key(&mut self.vm, exit);
+        if let Some(key) = self.crash_logger.add_if_new(&mut self.vm, &self.state) {
             if self.global.is_worker_instance() {
                 // Send this input to the main process to save and analyze.
                 // Note: hangs will already be sent if they are interesting in the code above.
@@ -736,25 +797,26 @@ impl Fuzzer {
 
         if config::VALIDATE_CRASHES {
             tracing::info!("validating crash/hang");
-            debugging::validate_last_exec(self, 0, exit);
+            debugging::validate_last_exec(self, exit);
         }
 
         Ok(())
     }
 
+    fn trace_new_bits(&mut self) {
+        if let Some(block_cov) = self.coverage.as_any().downcast_ref::<coverage::BlockCoverage>() {
+            let blocks = block_cov.blocks_for(&mut self.vm, &self.state.new_bits);
+            tracing::trace!("New coverage: {blocks:x?} (bits={:?})", self.state.new_bits);
+        }
+        else {
+            tracing::trace!("New coverage: (bits={:?})", self.state.new_bits);
+        }
+    }
+
     fn update_input_metadata(&mut self, id: InputId) {
         let depth = self.input_id.map_or(0, |x| self.corpus[x].metadata.depth + 1);
 
-        let input = &mut self.corpus[id];
-        if self.debug.save_input_coverage {
-            panic!();
-            // match input.blocks.as_mut() {
-            //     Some(x) => x.clone_from(&self.state.hit_coverage),
-            //     None => input.blocks = Some(self.state.hit_coverage.clone()),
-            // }
-        }
-
-        let metadata = &mut input.metadata;
+        let metadata = &mut self.corpus[id].metadata;
         metadata.parent_id = self.state.parent;
         metadata.coverage_bits = self.state.coverage_bits;
         metadata.instructions = self.state.instructions;
@@ -763,6 +825,7 @@ impl Fuzzer {
         metadata.streams = self.state.input.count_non_empty_streams() as u64;
         metadata.new_bits = self.state.new_bits.clone();
         metadata.stage = self.stage;
+        metadata.is_crashing = self.state.was_crash();
         metadata.mutation_kinds.clone_from(&self.state.mutation_kinds);
     }
 
@@ -776,10 +839,10 @@ impl Fuzzer {
             metadata.execs += 1;
             metadata.max_find_gap =
                 u64::max(metadata.max_find_gap, metadata.execs - metadata.last_find);
-            if self.state.was_crash {
+            if self.state.was_crash() {
                 metadata.crashes += 1;
             }
-            if self.state.was_hang {
+            if self.state.was_hang() {
                 metadata.hangs += 1;
             }
             if self.state.new_coverage {
@@ -832,28 +895,6 @@ impl Fuzzer {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq)]
-enum StageExit {
-    Finished,
-    Interrupted,
-    Unsupported,
-    Error,
-}
-
-impl From<StageStartError> for StageExit {
-    fn from(value: StageStartError) -> Self {
-        match value {
-            StageStartError::Unsupported => StageExit::Unsupported,
-            StageStartError::Skip => StageExit::Finished,
-            StageStartError::Interrupted => StageExit::Interrupted,
-            StageStartError::Unknown(err) => {
-                tracing::error!("error starting stage: {err:#}");
-                StageExit::Error
-            }
-        }
-    }
-}
-
 #[derive(
     Default, Debug, Clone, Copy, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize,
 )]
@@ -880,10 +921,14 @@ impl Stage {
             Stage::InputToState => "i2s",
         }
     }
+
+    pub fn is_extension(&self) -> bool {
+        matches!(self, Self::MultiStreamExtend | Self::MultiStreamExtendI2S)
+    }
 }
 
 #[derive(Debug)]
-enum StageStartError {
+pub enum StageExit {
     /// This stage is unsupported by the current fuzzing mode.
     Unsupported,
     /// The stage should be skipped
@@ -894,7 +939,7 @@ enum StageStartError {
     Unknown(anyhow::Error),
 }
 
-impl std::fmt::Display for StageStartError {
+impl std::fmt::Display for StageExit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unsupported => f.write_str("Unsupported Stage"),
@@ -905,7 +950,7 @@ impl std::fmt::Display for StageStartError {
     }
 }
 
-impl From<anyhow::Error> for StageStartError {
+impl From<anyhow::Error> for StageExit {
     fn from(err: anyhow::Error) -> Self {
         Self::Unknown(err)
     }
@@ -916,7 +961,7 @@ pub(crate) trait FuzzerStage {
 }
 
 pub(crate) trait StageData {
-    fn start(fuzzer: &mut Fuzzer) -> Result<Self, StageStartError>
+    fn start(fuzzer: &mut Fuzzer) -> Result<Self, StageExit>
     where
         Self: Sized;
     fn fuzz_one(&mut self, fuzzer: &mut Fuzzer) -> Option<VmExit>;
@@ -929,10 +974,8 @@ impl<S: StageData> FuzzerStage for S {
         let mut stage_data = match Self::start(fuzzer) {
             Ok(data) => data,
             Err(err) => match err {
-                StageStartError::Unsupported => return Ok(StageExit::Unsupported),
-                StageStartError::Skip => return Ok(StageExit::Finished),
-                StageStartError::Interrupted => return Ok(StageExit::Interrupted),
-                StageStartError::Unknown(err) => return Err(err),
+                StageExit::Unknown(err) => return Err(err),
+                exit => return Ok(exit),
             },
         };
 
@@ -948,7 +991,7 @@ impl<S: StageData> FuzzerStage for S {
         }
 
         stage_data.end(fuzzer);
-        Ok(StageExit::Finished)
+        Ok(StageExit::Skip)
     }
 }
 
@@ -956,7 +999,7 @@ impl<S: StageData> FuzzerStage for S {
 struct DummyStage;
 
 impl StageData for DummyStage {
-    fn start(_: &mut Fuzzer) -> Result<Self, StageStartError> {
+    fn start(_: &mut Fuzzer) -> Result<Self, StageExit> {
         Ok(Self)
     }
 
@@ -974,7 +1017,7 @@ struct SyncStage {
 }
 
 impl StageData for SyncStage {
-    fn start(fuzzer: &mut Fuzzer) -> Result<Self, StageStartError> {
+    fn start(fuzzer: &mut Fuzzer) -> Result<Self, StageExit> {
         let mut inputs = fuzzer.global.take_all();
         if fuzzer.global.is_main_instance() && !inputs.is_empty() {
             tracing::info!("synchronizing {} inputs from other instances", inputs.len());

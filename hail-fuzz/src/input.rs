@@ -226,6 +226,16 @@ impl MultiStream {
     pub fn trim(&mut self) {
         self.streams.values_mut().for_each(|x| x.bytes.truncate(x.cursor as usize));
     }
+
+    pub fn snapshot_cursors(&self) -> Vec<(u64, u32)> {
+        self.streams.iter().map(|(key, value)| (*key, value.cursor)).collect()
+    }
+
+    pub fn restore_cursors(&mut self, snapshot: &Vec<(u64, u32)>) {
+        snapshot
+            .iter()
+            .for_each(|(key, cursor)| self.streams.get_mut(key).unwrap().cursor = *cursor);
+    }
 }
 
 // pub fn multi_stream(

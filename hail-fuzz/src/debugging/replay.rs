@@ -6,7 +6,7 @@ use std::{
 use anyhow::Context;
 use hashbrown::HashMap;
 
-use icicle_fuzzing::{FuzzTarget, Runnable};
+use icicle_fuzzing::{parse_addr_or_symbol, FuzzTarget, Runnable};
 use icicle_vm::{cpu::ExceptionCode, Vm, VmExit};
 
 use crate::{
@@ -129,7 +129,8 @@ fn replay_bench(mut vm: Vm, mut target: CortexmMultiStream, trials: u64) -> anyh
         core_affinity::set_for_current(*core_id);
     }
 
-    let snapshot = vm.snapshot();
+    let mut snapshot = vm.snapshot();
+    let mut cursor_snapshot = target.get_mmio_handler(&mut vm).unwrap().source.snapshot_cursors();
 
     // Perform a dry run of the input to warm up the VM.
     let exit = target.run(&mut vm);
@@ -144,11 +145,44 @@ fn replay_bench(mut vm: Vm, mut target: CortexmMultiStream, trials: u64) -> anyh
     let expected_icount = vm.cpu.icount();
     eprintln!("[icicle] exited with: {exit:?} (icount = {expected_icount})");
 
+    // We allow replaying from part way through the input if provided from an environment variable.
+    if let Some(bp) =
+        std::env::var("REPLAY_FROM").ok().and_then(|addr| parse_addr_or_symbol(&addr, &mut vm))
+    {
+        vm.restore(&snapshot);
+        target.get_mmio_handler(&mut vm).unwrap().source.restore_cursors(&cursor_snapshot);
+
+        vm.add_breakpoint(bp);
+        let exit = target.run(&mut vm);
+        anyhow::ensure!(
+            matches!(exit, Ok(VmExit::Breakpoint)),
+            "Failed to hit breakpoint at: {bp:#x} when `REPLAY_FROM` is set (exited with: {exit:?} at: {:#x})",
+            vm.cpu.read_pc()
+        );
+        vm.remove_breakpoint(bp);
+
+        eprintln!("[icicle] hit break: {exit:?} (icount = {expected_icount})");
+
+        snapshot = vm.snapshot();
+        cursor_snapshot = target.get_mmio_handler(&mut vm).unwrap().source.snapshot_cursors();
+    }
+
+    vm.recompile();
+
+    // Dump JIT function ID -> guest address mapping for analysis.
+    if let Err(e) = vm.jit.dump_jit_mapping("jit_table.txt".as_ref(), vm.env.debug_info().unwrap())
+    {
+        tracing::warn!("Failed to dump JIT table: {e}")
+    }
+
     let start = std::time::Instant::now();
 
     for _ in 0..trials {
         vm.restore(&snapshot);
-        target.get_mmio_handler(&mut vm).unwrap().source.seek_to_start();
+        // Restoring currently triggers a lookup flush, but we know the code will not change between
+        // execs so we can skip it here.
+        vm.cpu.mem.mapping_changed = false;
+        target.get_mmio_handler(&mut vm).unwrap().source.restore_cursors(&cursor_snapshot);
         let _ = target.run(&mut vm);
 
         // Ensure execution doesn't diverge.

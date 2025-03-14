@@ -130,13 +130,19 @@ impl<D> CorpusStore<D> {
         });
 
         for group in self.coverage_hits.values().filter(|x| !x.is_empty()) {
-            let min =
-                *group.iter().min_by_key(|id| self.test_cases[**id].favored_metric()).unwrap();
+            let Some(&min) = group.iter().min_by_key(|id| self.test_cases[**id].favored_metric())
+            else {
+                continue;
+            };
             self.test_cases[min].favored = true;
             if group.len() == 1 {
                 self.test_cases[min].has_unique_edge = true;
             }
         }
+    }
+
+    fn is_favored(&self, id: usize) -> bool {
+        self.test_cases[id].favored
     }
 }
 
@@ -193,10 +199,6 @@ impl CorpusStore<MultiStream> {
         self.add_to_global_metadata(id, state);
 
         let entry = &mut self.test_cases[id];
-        if let Some(_blocks) = entry.blocks.as_mut() {
-            // blocks.clone_from(&state.hit_coverage);
-            unimplemented!();
-        }
         entry.data.clone_from(&state.input);
         entry.metadata.untrimed_len = entry.metadata.len;
         entry.metadata.len = state.input.total_bytes() as u64;
@@ -217,8 +219,12 @@ impl CorpusStore<MultiStream> {
         self.metadata.total_input_bytes += state.input.total_bytes();
         self.metadata.total_instructions += state.instructions;
 
-        for cov in &state.hit_coverage {
-            self.coverage_hits.entry(*cov).or_default().push(id);
+        // Ignore crashing inputs from global coverage to avoid them being selected during input
+        // prioritization.
+        if !state.was_crash() {
+            for cov in &state.hit_coverage {
+                self.coverage_hits.entry(*cov).or_default().push(id);
+            }
         }
 
         for (addr, entry) in &state.input.streams {
@@ -369,11 +375,13 @@ pub(crate) struct InputMetadata {
     pub length_extension_rounds: u64,
     /// The number of havoc rounds applied to this input.
     pub havoc_rounds: u64,
+    /// Whether this was a crashing input.
+    pub is_crashing: bool,
 }
 
 pub(crate) trait InputSource {
     /// Get the next input the input queue. Returns `None` if the queue is empty.
-    fn next_input(&mut self) -> Option<InputId>;
+    fn next_input(&mut self, store: &CorpusStore<MultiStream>) -> Option<InputId>;
 }
 
 pub(crate) trait InputQueue: InputSource {
@@ -445,10 +453,18 @@ impl CoverageQueue {
 }
 
 impl InputSource for CoverageQueue {
-    fn next_input(&mut self) -> Option<InputId> {
+    fn next_input(&mut self, corpus: &CorpusStore<MultiStream>) -> Option<InputId> {
         let id = match self.new.pop() {
-            // Fuzz small, new entries first
-            Some(entry) => entry.id,
+            // Fuzz small, new entries first, but ensure we haven't already found a better input.
+            Some(entry) => {
+                if corpus.is_favored(entry.id) {
+                    entry.id
+                }
+                else {
+                    self.queue.push_back(entry.id);
+                    self.queue.pop_front()?
+                }
+            }
             // Fallback to the next scheduled input,
             None => self.queue.pop_front()?,
         };

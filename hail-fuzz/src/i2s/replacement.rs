@@ -6,19 +6,15 @@ use rand::Rng;
 use rand_distr::Distribution;
 
 use crate::{
+    Fuzzer, FuzzerStage, Snapshot, StageExit,
     i2s::{
+        MAX_ONE_BYTE_MATCHES, MAX_ONE_BYTE_REPLACEMENTS,
         finder::{self, CmpCursor, Comparisons, ReplacementFinder},
-        log_cmplog_data, MAX_ONE_BYTE_MATCHES, MAX_ONE_BYTE_REPLACEMENTS, MAX_STREAM_LEN,
+        log_cmplog_data,
     },
     input::{MultiStream, StreamKey},
     utils::{get_non_empty_streams, get_stream_weights, insert_slice, replace_slice_strided},
-    Fuzzer, FuzzerStage, Snapshot, StageExit, StageStartError,
 };
-
-/// Streams related to interrupts should not be used for i2s replacement.
-fn is_interrupt_stream(addr: u64) -> bool {
-    addr == icicle_cortexm::IRQ_NUMBER_ADDR || addr == icicle_cortexm::TIMER_CHOICE_ADDR
-}
 
 pub(crate) struct I2SRandomReplacement {
     comparisons: Comparisons,
@@ -47,13 +43,18 @@ impl I2SRandomReplacement {
         }
 
         let mut streams = get_non_empty_streams(&fuzzer.state.input);
-        streams.retain(|&(addr, _)| !is_interrupt_stream(addr));
+        streams.retain(|&(addr, _)| !crate::utils::is_interrupt_stream(addr));
         if streams.is_empty() {
             return None;
         }
         let stream_distr = get_stream_weights(fuzzer, input_id, &streams);
 
-        Some(Self { comparisons, finder: ReplacementFinder::default(), streams, stream_distr })
+        Some(Self {
+            comparisons,
+            finder: ReplacementFinder::new(fuzzer.features.strided_int_matches),
+            streams,
+            stream_distr,
+        })
     }
 
     pub fn random_replace(&mut self, fuzzer: &mut Fuzzer) -> Option<()> {
@@ -93,6 +94,9 @@ pub(crate) struct I2SReplaceStage {
     comparisons: Comparisons,
     /// The current position in the input we are attempting to find the next replacement from
     cursor: Position,
+    /// Bytes shared with the parent input (which we skip trying replacements for, since
+    /// replacements should have already been attempted by the parent).
+    parent_prefix: HashMap<u64, usize>,
 
     /// The number of times a certain value has been matched.
     tried_matches: HashMap<u64, usize>,
@@ -136,6 +140,19 @@ impl FuzzerStage for I2SReplaceStage {
                 return Ok(StageExit::Interrupted);
             }
 
+            if fuzzer.state.new_coverage {
+                let input = &state.base_input.streams[&state.replacement.stream_key].bytes;
+                let offset = state.replacement.stream_offset;
+                tracing::trace!(
+                    "New coverage for I2S: {:#x}@{offset} {:02x?} with {:02x?} for cmp@{:#x}",
+                    state.replacement.stream_key,
+                    &input
+                        [offset..offset + state.replacement.bytes.len() * state.replacement.stride],
+                    &state.replacement.bytes,
+                    state.replacement.cmp_addr,
+                );
+            }
+
             // Try extended replacement:
             if !state.replacement.extended.is_empty() {
                 Snapshot::restore_initial(fuzzer);
@@ -155,22 +172,23 @@ impl FuzzerStage for I2SReplaceStage {
             .unwrap();
         }
 
-        Ok(StageExit::Finished)
+        Ok(StageExit::Skip)
     }
 }
 
 impl I2SReplaceStage {
-    fn start(fuzzer: &mut Fuzzer) -> Result<Self, StageStartError> {
+    fn start(fuzzer: &mut Fuzzer) -> Result<Self, StageExit> {
+        let input_id = fuzzer.input_id.ok_or(StageExit::Skip)?;
+
         // Colorization would have just run before this stage, so the current input is the colorized
         // input.
         fuzzer.state.input.seek_to_start();
         let mut base_input = fuzzer.state.input.clone();
 
         Snapshot::restore_initial(fuzzer);
-        let (_, comparisons) = finder::capture_comparisons(fuzzer).ok_or(StageStartError::Skip)?;
+        let (_, comparisons) = finder::capture_comparisons(fuzzer).ok_or(StageExit::Skip)?;
 
         if fuzzer.debug.cmplog && fuzzer.global.is_main_instance() {
-            let input_id = fuzzer.input_id.unwrap_or(0);
             comparisons
                 .save_to_file(&fuzzer.workdir.join(format!("cmplog/{input_id}.cmplog.txt")))
                 .unwrap();
@@ -194,10 +212,16 @@ impl I2SReplaceStage {
             }
         }
 
+        let parent_prefix = match fuzzer.features.skip_prefix {
+            true => crate::utils::count_parent_prefix(fuzzer, input_id, true),
+            false => HashMap::default(),
+        };
+
         Ok(I2SReplaceStage {
             comparisons,
-            cursor: Position::default(),
+            cursor: Position::new(fuzzer.features.strided_int_matches),
             base_input,
+            parent_prefix,
             tried_matches: HashMap::new(),
             tried_replacements: HashMap::new(),
             replacement: Replacement::default(),
@@ -216,12 +240,16 @@ impl I2SReplaceStage {
             let (stream_key, dst) =
                 fuzzer.state.input.streams.iter().nth(self.cursor.stream).unwrap();
 
-            if is_interrupt_stream(*stream_key) {
+            if crate::utils::is_interrupt_stream(*stream_key) {
                 self.cursor.stream += 1;
             }
 
+            let max_len = self
+                .parent_prefix
+                .get(stream_key)
+                .map_or(fuzzer.features.max_i2s_bytes, |prefix| (dst.bytes.len() - *prefix));
             self.cursor.finder.offset =
-                self.cursor.finder.offset.max(dst.bytes.len().saturating_sub(MAX_STREAM_LEN));
+                self.cursor.finder.offset.max(dst.bytes.len().saturating_sub(max_len));
 
             loop {
                 let found = match self.comparisons.get(self.cursor.cmp) {
@@ -266,7 +294,7 @@ impl I2SReplaceStage {
 
                 self.cursor.cmp.offset += 1;
 
-                let start_offset = dst.bytes.len().saturating_sub(MAX_STREAM_LEN);
+                let start_offset = dst.bytes.len().saturating_sub(fuzzer.features.max_i2s_bytes);
                 self.cursor.finder.reset(start_offset);
             }
 
@@ -331,7 +359,7 @@ impl I2SReplaceStage {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Debug)]
 struct Position {
     /// The stream we are in the middle of mutating.
     stream: usize,
@@ -339,6 +367,16 @@ struct Position {
     cmp: CmpCursor,
     /// The offset within the stream.
     finder: ReplacementFinder,
+}
+
+impl Position {
+    fn new(match_strided_ints: bool) -> Self {
+        Self {
+            stream: 0,
+            cmp: CmpCursor::default(),
+            finder: ReplacementFinder::new(match_strided_ints),
+        }
+    }
 }
 
 #[derive(Clone, Default)]

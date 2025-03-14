@@ -15,7 +15,7 @@ impl FuzzerStage for TrimStage {
     fn run(fuzzer: &mut Fuzzer, stats: &mut LocalStats) -> anyhow::Result<StageExit> {
         let Some(input_id) = fuzzer.input_id
         else {
-            return Ok(StageExit::Finished);
+            return Ok(StageExit::Skip);
         };
         fuzzer.copy_current_input();
         let initial_len = fuzzer.corpus[input_id].data.total_bytes();
@@ -29,7 +29,7 @@ impl FuzzerStage for TrimStage {
         // Keeps track of the location to trim next.
         let Some(mut cursor) = MultiStreamTrimCursor::new(&fuzzer.state.input)
         else {
-            return Ok(StageExit::Finished);
+            return Ok(StageExit::Skip);
         };
 
         // The order we trim things in sometimes matter (e.g., one stream might be unable to be
@@ -101,7 +101,7 @@ impl FuzzerStage for TrimStage {
             tracing::debug!("input not trimmed ({attempts} attempts)");
         }
 
-        Ok(StageExit::Finished)
+        Ok(StageExit::Skip)
     }
 }
 

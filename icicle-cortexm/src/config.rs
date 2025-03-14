@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use icicle_vm::cpu::mem::perm;
@@ -95,11 +95,11 @@ pub struct FirmwareConfig {
 
     /// Locations to inject code for patching register values.
     #[serde(default)]
-    pub patch: IndexMap<u64, ValuePatch>,
+    pub patch: IndexMap<String, ValuePatch>,
 
     /// Locations to inject code for patching register values.
     #[serde(default)]
-    pub mem_patch: IndexMap<u64, Vec<u8>>,
+    pub mem_patch: IndexMap<String, Vec<u8>>,
 
     /// A mapping from addresses to symbol names that can be used for handlers.
     #[serde(default)]
@@ -131,6 +131,10 @@ impl Default for FirmwareConfig {
 }
 
 impl FirmwareConfig {
+    pub fn relative_path(&self, path: &Path) -> PathBuf {
+        self.path.parent().unwrap_or(Path::new(".")).join(path)
+    }
+
     pub fn from_env() -> anyhow::Result<Self> {
         // Note: we fallback to trying to find a config file called `FUZZWARE_CONFIG` for
         // compatibility with earlier version of the code.
@@ -165,7 +169,7 @@ impl FirmwareConfig {
                 .with_context(|| format!("failed to read '{}'", config_path.display()))?,
         )
         .with_context(|| format!("error parsing: {}", config_path.display()))?;
-        config.path = root;
+        config.path = config_path;
 
         let num_entry_regions = config.memory_map.values().filter(|x| x.is_entry).count();
         if num_entry_regions > 1 {

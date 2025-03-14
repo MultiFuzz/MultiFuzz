@@ -4,11 +4,10 @@ use hashbrown::HashMap;
 use icicle_fuzzing::CrashKind;
 
 use crate::{
-    i2s::MAX_STREAM_LEN,
+    Fuzzer, FuzzerStage, Snapshot, Stage, StageExit,
     input::{MultiStream, StreamKey},
     queue::InputId,
     utils::randomize_input,
-    Fuzzer, FuzzerStage, Snapshot, Stage, StageExit, StageStartError,
 };
 
 pub(crate) struct ColorizationStage {
@@ -34,10 +33,8 @@ impl FuzzerStage for ColorizationStage {
         let mut state = match Self::start(fuzzer) {
             Ok(state) => state,
             Err(err) => match err {
-                StageStartError::Unsupported => return Ok(StageExit::Unsupported),
-                StageStartError::Skip => return Ok(StageExit::Finished),
-                StageStartError::Interrupted => return Ok(StageExit::Interrupted),
-                StageStartError::Unknown(err) => return Err(err),
+                StageExit::Unknown(err) => return Err(err),
+                exit => return Ok(exit),
             },
         };
 
@@ -46,7 +43,7 @@ impl FuzzerStage for ColorizationStage {
         }
 
         state.end(fuzzer);
-        Ok(StageExit::Finished)
+        Ok(StageExit::Skip)
     }
 }
 
@@ -73,17 +70,20 @@ impl ColorizationStage {
         }
 
         self.ranges.clear();
-        let (stream, len) = self.remaining_streams.pop()?;
-        self.attempts = (len as usize * 2).min(MAX_STREAM_LEN);
 
-        Some(Range { stream, start: len.saturating_sub(MAX_STREAM_LEN as u32), end: len })
+        let (stream, max_len) = self.remaining_streams.pop()?;
+        let len = self.mutated_input.streams[&stream].bytes.len() as u32;
+
+        self.attempts = (len as usize * 2).min(max_len as usize * 2);
+
+        Some(Range { stream, start: len.saturating_sub(max_len), end: len })
     }
 
-    pub fn start(fuzzer: &mut Fuzzer) -> Result<Self, StageStartError>
+    pub fn start(fuzzer: &mut Fuzzer) -> Result<Self, StageExit>
     where
         Self: Sized,
     {
-        let input_id = fuzzer.input_id.ok_or(StageStartError::Skip)?;
+        let input_id = fuzzer.input_id.ok_or(StageExit::Skip)?;
 
         fuzzer.copy_current_input();
         fuzzer.reset_input_cursor().unwrap();
@@ -92,13 +92,31 @@ impl ColorizationStage {
 
         Snapshot::restore_initial(fuzzer);
         fuzzer.write_input_to_target().unwrap();
-        fuzzer.execute().ok_or(StageStartError::Interrupted)?;
+        fuzzer.execute().ok_or(StageExit::Interrupted)?;
         let original_icount = fuzzer.vm.cpu.icount();
+
+        // If this input was generated via length extension, then we only try and colorize the newly
+        // extended bytes.
+        let prefix_bytes = match fuzzer.features.skip_prefix {
+            true => crate::utils::count_parent_prefix(fuzzer, input_id, true),
+            false => HashMap::new(),
+        };
+
+        let max_len = fuzzer.features.max_i2s_bytes;
 
         let mut remaining_streams = vec![];
         for (addr, stream) in &fuzzer.state.input.streams {
             if !stream.bytes.is_empty() {
-                remaining_streams.push((*addr, stream.bytes.len() as u32));
+                let max_len = prefix_bytes
+                    .get(addr)
+                    .map_or(max_len.min(stream.bytes.len()) as u32, |prefix| {
+                        (stream.bytes.len() - *prefix) as u32
+                    });
+                tracing::debug!(
+                    "{addr:#x}: colorizing up to {max_len} of {} bytes",
+                    stream.bytes.len()
+                );
+                remaining_streams.push((*addr, max_len));
             }
         }
 
@@ -176,8 +194,9 @@ impl ColorizationStage {
 
         let mut total_colorized = 0;
         let mut total_attempted = 0;
+        let max_len = fuzzer.features.max_i2s_bytes;
         for (&addr, &count) in &self.colorized_bytes {
-            let attempted = fuzzer.state.input.streams[&addr].bytes.len().min(MAX_STREAM_LEN);
+            let attempted = fuzzer.state.input.streams[&addr].bytes.len().min(max_len);
 
             let metadata = fuzzer.corpus.metadata.streams.entry(addr).or_default();
             metadata.colorized_bytes.0 += count;

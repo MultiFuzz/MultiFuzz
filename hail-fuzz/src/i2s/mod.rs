@@ -11,10 +11,6 @@ use anyhow::Context;
 use icicle_fuzzing::cmplog2::CmpLog2Ref;
 use icicle_vm::Vm;
 
-/// The maximum number of bytes (taken from the end of the stream) that the I2S stage will try to
-/// perform I2S replacements within.
-pub const MAX_STREAM_LEN: usize = 512;
-
 /// The maximum number of times (per-stream) the I2S stage will attempt to replace a target
 /// destination value.
 const MAX_ONE_BYTE_MATCHES: usize = 16;

@@ -1,11 +1,11 @@
 use std::{
     path::PathBuf,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
 };
 
 use anyhow::Context;
 use icicle_cortexm::config::FirmwareConfig;
-use icicle_fuzzing::{parse_bool_env, FuzzConfig};
+use icicle_fuzzing::{FuzzConfig, parse_bool_env};
 use icicle_vm::Vm;
 
 use crate::coverage::{BlockCoverage, BucketStrategy, CoverageAny, EdgeCountMap};
@@ -40,6 +40,7 @@ pub struct Config {
 }
 
 /// Controls which features are enabled or not.
+#[derive(Debug)]
 pub struct EnabledFeatures {
     /// Use access contexts for multi-stream inputs.
     pub access_contexts: bool,
@@ -52,6 +53,14 @@ pub struct EnabledFeatures {
     pub havoc: bool,
     /// Whether the input-to-state stage should be enabled.
     pub cmplog: bool,
+    /// The maximum number of bytes (taken from the end of the stream) that the I2S stage will try
+    /// to perform I2S replacements within.
+    pub max_i2s_bytes: usize,
+    /// Configures whether input-to-state replacements should use strided matches for integer
+    /// types.
+    pub strided_int_matches: bool,
+    /// Whether the colorization stage should be enabled.
+    pub colorization: bool,
     /// Whether the input-to-state stage should automatically add values to the dictionary.
     pub auto_dict: bool,
     /// Whether we should automatically attempt to trim inputs after each execution.
@@ -67,10 +76,16 @@ pub struct EnabledFeatures {
     pub add_favored_inputs: bool,
     /// Whether to increase extensions if we repeatedly reach the end of a stream.
     pub extension_factor: bool,
+    /// Skip applying certain mutations on prefix bytes shared with the parent.
+    pub skip_prefix: bool,
+    /// Dump JIT function ID mapping for perf analysis.
+    pub dump_jit_mapping: bool,
 }
 
 impl EnabledFeatures {
     pub fn from_env() -> anyhow::Result<Self> {
+        let dump_jit_mapping = parse_bool_env("DUMP_JIT_MAPPING")?.unwrap_or(false);
+
         let simple_energy_assignment = parse_bool_env("SIMPLE_ENERGY_ASSIGNMENT")?.unwrap_or(false);
         let access_contexts =
             icicle_fuzzing::parse_bool_env("USE_ACCESS_CONTEXTS")?.unwrap_or(false);
@@ -93,33 +108,50 @@ impl EnabledFeatures {
                 resize_load_level,
                 havoc: false,
                 cmplog: false,
+                max_i2s_bytes: 0,
+                strided_int_matches: false,
+                colorization: false,
                 auto_trim: false,
                 smart_trim: false,
                 auto_dict: false,
                 simple_energy_assignment,
                 extension_factor,
                 add_favored_inputs,
+                skip_prefix: false,
+                dump_jit_mapping,
             });
         }
 
         // Enabled by default
         let cmplog = parse_bool_env("ENABLE_CMPLOG")?.unwrap_or(true);
+        let max_i2s_bytes =
+            std::env::var("MAX_I2S_BYTES").ok().and_then(|s| s.parse().ok()).unwrap_or(512);
+        let strided_int_matches = parse_bool_env("ENABLE_STRIDED_INT_MATCHES")?.unwrap_or(true);
+        let colorization = parse_bool_env("ENABLE_COLORIZATION")?.unwrap_or(cmplog);
         let havoc = parse_bool_env("ENABLE_HAVOC")?.unwrap_or(true);
         let auto_trim = parse_bool_env("ENABLE_AUTO_TRIM")?.unwrap_or(true);
         let smart_trim = parse_bool_env("ENABLE_TRIM")?.unwrap_or(true);
         let auto_dict = parse_bool_env("ENABLE_AUTO_DICT")?.unwrap_or(true);
+
+        // Disable by default
+        let skip_prefix = parse_bool_env("SKIP_PREFIX")?.unwrap_or(false);
 
         Ok(Self {
             access_contexts,
             resize_load_level,
             havoc,
             cmplog,
+            max_i2s_bytes,
+            strided_int_matches,
+            colorization,
             auto_trim,
             smart_trim,
             auto_dict,
             simple_energy_assignment,
             extension_factor,
             add_favored_inputs,
+            skip_prefix,
+            dump_jit_mapping,
         })
     }
 }
@@ -131,7 +163,8 @@ pub struct DebugSettings {
     pub havoc: bool,
     /// Whether we should save debug info for length extensions.
     pub save_length_extension_metadata: bool,
-    /// Save block coverage for each input (useful for monitoring).
+    /// Save block coverage for each input (useful for monitoring) (currently unsupported).
+    #[allow(unused)]
     pub save_input_coverage: bool,
 }
 

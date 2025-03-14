@@ -9,7 +9,7 @@ use crate::{
     mutations::{self, Mutation, ALL_MUTATIONS},
     queue::CorpusStore,
     utils::{get_non_empty_streams, get_stream_weights, random_bytes},
-    DictionaryRef, Fuzzer, Snapshot, StageData, StageStartError,
+    DictionaryRef, Fuzzer, Snapshot, StageData, StageExit,
 };
 
 /// A fuzzing stage that applies random mutations to the input.
@@ -27,18 +27,18 @@ pub(crate) struct HavocStage {
 }
 
 impl StageData for HavocStage {
-    fn start(fuzzer: &mut Fuzzer) -> Result<Self, StageStartError> {
+    fn start(fuzzer: &mut Fuzzer) -> Result<Self, StageExit> {
         fuzzer.copy_current_input();
 
         let (Some(id), data) = (fuzzer.input_id, &fuzzer.state.input)
         else {
-            return Err(StageStartError::Unsupported);
+            return Err(StageExit::Unsupported);
         };
 
         let streams = get_non_empty_streams(data);
         if streams.is_empty() {
             // Must have at least one non-empty stream.
-            return Err(StageStartError::Skip);
+            return Err(StageExit::Skip);
         }
 
         let stream_distr = get_stream_weights(fuzzer, id, &streams);

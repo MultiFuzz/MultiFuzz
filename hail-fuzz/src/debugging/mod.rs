@@ -8,11 +8,7 @@ pub use replay::{analyze_crashes, replay, save_block_coverage};
 
 use crate::{input::MultiStream, utils};
 
-pub(crate) fn validate_last_exec(
-    fuzzer: &mut crate::Fuzzer,
-    snapshot_start: u64,
-    exit: crate::VmExit,
-) -> Option<()> {
+pub(crate) fn validate_last_exec(fuzzer: &mut crate::Fuzzer, exit: crate::VmExit) -> Option<()> {
     tracing::info!("validating input with new coverage: {:?}", fuzzer.state.new_bits);
     let expected_new_bits = fuzzer.state.new_bits.clone();
 
@@ -32,24 +28,36 @@ pub(crate) fn validate_last_exec(
     tracing::info!("Ended with exit: {root_exit:?}");
 
     if !(icount == fuzzer.vm.cpu.icount && pc == fuzzer.vm.cpu.read_pc() && exit == root_exit) {
+        eprintln!(
+            "Execution diverged when executing from snapshot (starting at icount={}):
+    snapshot: icount={icount}, pc={pc:#x}, exit={exit:?}, input_bytes={} (read={}),
+    root    : icount={}, pc={:#x}, exit={root_exit:?}",
+            fuzzer.prefix_snapshot.as_ref().map_or(0, |x| x.vm.cpu.icount),
+            fuzzer.state.input.total_bytes(),
+            fuzzer.state.input.bytes_read(),
+            fuzzer.vm.cpu.icount,
+            fuzzer.vm.cpu.read_pc(),
+        );
+
         let root_trace = fuzzer.path_tracer.map(|x| x.get_last_blocks(&mut fuzzer.vm));
         if let (Some(snapshot), Some(root)) = (trace, root_trace) {
+            if let Some((a, b)) = snapshot.iter().zip(&root).find(|(a, b)| a != b) {
+                eprintln!("Diverged at:\n    snapshot: {a:x?}\n    root    : {b:x?}");
+            }
+            else {
+                eprintln!("No divergance? One of the traces was shorter.");
+            }
+
             trace::save_path_trace(&fuzzer.workdir.join("snapshot_trace.txt"), &snapshot);
             trace::save_path_trace(&fuzzer.workdir.join("root_trace.txt"), &root);
+        }
+        else {
+            eprintln!("Missing traces for executions (run with `ICICLE_TRACK_PATH=1` to obtain)");
         }
 
         let _ = std::fs::write(
             fuzzer.workdir.join("disasm.asm"),
             icicle_vm::debug::dump_disasm(&fuzzer.vm).unwrap(),
-        );
-
-        eprintln!(
-            "Execution divered when executing from snapshot starting at: {}\n\
-snapshot: icount={icount}, pc={pc:#x}, exit={exit:?}\n\
-root    : icount={}, pc={:#x}, exit={root_exit:?}",
-            snapshot_start,
-            fuzzer.vm.cpu.icount,
-            fuzzer.vm.cpu.read_pc(),
         );
 
         let _ = std::fs::write(
@@ -62,18 +70,6 @@ root    : icount={}, pc={:#x}, exit={root_exit:?}",
     let new_bits = fuzzer.coverage.new_bits(&mut fuzzer.vm);
     if new_bits != expected_new_bits {
         eprintln!("coverage bit map diverged! expected: {expected_new_bits:?}, got {new_bits:?}");
-    }
-
-    if false {
-        let root_trace = fuzzer.path_tracer.map(|x| x.get_last_blocks(&mut fuzzer.vm));
-        if let Some(root) = root_trace {
-            trace::save_path_trace("trace.txt".as_ref(), &root);
-            let _ = std::fs::write(
-                fuzzer.workdir.join("diverging_input.bin"),
-                fuzzer.state.input.to_bytes(),
-            );
-            panic!();
-        }
     }
 
     Some(())

@@ -9,11 +9,10 @@ mod unicorn_api;
 use std::{cell::UnsafeCell, os::raw::c_void, path::PathBuf};
 
 use anyhow::Context as _;
-use hashbrown::HashMap;
-use icicle_fuzzing::{parse_addr_or_symbol, parse_u64_with_prefix};
+use icicle_fuzzing::parse_addr_or_symbol;
 use icicle_vm::{
     cpu::{
-        debug_info::{DebugInfo, SourceLocation},
+        debug_info::{DebugInfo, SourceLocation, SymbolKind},
         mem::{perm, IoHandler, IoMemory, Mapping},
         utils::get_u64,
         Cpu, Exception, ExceptionCode, ValueSource,
@@ -149,7 +148,7 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
             if let Some(file) = region.file.as_ref() {
                 let mut path = std::path::PathBuf::from(file);
                 if !path.exists() {
-                    path = config.path.join(path);
+                    path = config.relative_path(&path);
                 }
 
                 let data = std::fs::read(&path)
@@ -173,6 +172,15 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
 
         if let Some(path) = debug_info_path {
             vm.env_mut::<FuzzwareEnvironment>().unwrap().set_debug_info(path)?;
+        }
+        else {
+            // If there was no ELF file to use for debug info, then use any symbols provided
+            // directly in the config file.
+            let debug_info = &mut vm.env_mut::<FuzzwareEnvironment>().unwrap().debug_info;
+            let symbols = std::rc::Rc::make_mut(&mut debug_info.symbols);
+            for (addr, name) in &config.symbols {
+                symbols.insert(name.into(), *addr & !1, 1, SymbolKind::Function);
+            }
         }
 
         let (vtor, base_addr) = match (vtor, entry_image_base) {
@@ -241,7 +249,10 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
 
             for (name, trigger) in config.interrupt_triggers.iter() {
                 tracing::info!("adding trigger {name}: {trigger:x?}");
-                let addr = trigger.addr().and_then(|sym| config.lookup_symbol(sym)).unwrap_or(0);
+                let addr = match trigger.addr() {
+                    Some(addr) => get_symbol(vm, addr)?,
+                    None => 0,
+                };
                 let num_skips = 0;
                 let num_pends = 1;
                 map_uc_err(fuzzware::add_interrupt_trigger(
@@ -290,28 +301,14 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
             }
         }
 
-        // Compute mapping table from name to address for the symbols defined in fuzzware config.
-        let lookup_table: HashMap<_, _> =
-            config.symbols.iter().map(|(addr, name)| (name, *addr & !1)).collect();
-
         // Register handlers for functions if enabled.
         let mut ignore: Vec<u64> = vec![];
         let mut crash_at: Vec<u64> = vec![];
         if let Ok(entry) = std::env::var("REMOVE_DELAYS") {
-            ignore.extend(entry.split(',').filter_map(|x| {
-                if let Some(addr) = vm.env.lookup_symbol(x).map(|x| x & !1) {
-                    return Some(addr);
-                }
-                x.strip_prefix("0x").and_then(|x| u64::from_str_radix(x, 16).ok())
-            }));
+            ignore.extend(entry.split(',').filter_map(|x| parse_addr_or_symbol(x, vm)));
         }
         for (symbol, handler) in &config.handlers {
-            let Some(addr) =
-                lookup_table.get(symbol).copied().or_else(|| parse_addr_or_symbol(&symbol, vm))
-            else {
-                tracing::error!("Failed to resolve address of: {symbol}");
-                continue;
-            };
+            let addr = get_symbol(vm, &symbol)?;
             match handler.as_deref() {
                 Some("ignore") | None => ignore.push(addr),
                 Some("crash") => crash_at.push(addr),
@@ -332,12 +329,7 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
         let mut exit_at = vec![];
         let mut hang_at = vec![];
         for (symbol, handler) in &config.exit_at {
-            let Some(addr) =
-                lookup_table.get(symbol).copied().or_else(|| parse_u64_with_prefix(&symbol))
-            else {
-                tracing::error!("Failed to resolve address of: {symbol}");
-                continue;
-            };
+            let addr = get_symbol(vm, &symbol)?;
 
             match handler.as_ref().map(|x| x.as_str()) {
                 Some("hang") => hang_at.push(addr),
@@ -361,23 +353,30 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
         }
 
         for (addr, patch) in &config.patch {
+            let addr = get_symbol(vm, addr)?;
             let reg = vm.cpu.arch.sleigh.get_reg(&patch.register).ok_or_else(|| {
                 anyhow::format_err!("Unknown register in `patch` for {addr:#x}: {}", patch.register)
             })?;
             icicle_vm::cpu::lifter::register_value_patcher(
                 &mut vm.lifter,
-                *addr,
+                addr,
                 reg.var,
                 patch.value,
             );
         }
 
         for (addr, value) in &config.mem_patch {
-            vm.cpu.mem.write_bytes(*addr, &value, perm::NONE)?;
+            let addr = get_symbol(vm, addr)?;
+            vm.cpu.mem.write_bytes(addr, &value, perm::NONE)?;
         }
 
         Ok(())
     }
+}
+
+fn get_symbol(vm: &mut icicle_vm::Vm, symbol: &str) -> anyhow::Result<u64> {
+    parse_addr_or_symbol(symbol, vm)
+        .ok_or_else(|| anyhow::format_err!("Failed to resolve symbol: {symbol}"))
 }
 
 /// Attempts to find an ELF binary with the same base name as target path to load debug info from.
@@ -472,6 +471,8 @@ impl<T> icicle_fuzzing::Runnable for CortexmTarget<T> {
                         VmExit::UnhandledException((ExceptionCode::InternalError, 0))
                     }
 
+                    fuzzware::uc_err::UC_ERR_NVIC_RESET => VmExit::Killed,
+
                     fuzzware::uc_err::UC_ERR_FETCH_PROT => VmExit::UnhandledException((
                         ExceptionCode::InvalidInstruction,
                         vm.cpu.read_pc(),
@@ -541,13 +542,18 @@ pub struct FuzzwareEnvironment {
 
     /// Debug info loaded into the environment.
     debug_info: DebugInfo,
+
     /// The path to the ELF binary for the currently configured target.
     pub elf_path: Option<PathBuf>,
 
     /// The value saved value used for restoring coverage information after masking.
     saved_prev: Option<u64>,
+
     /// Handles fixing coverage state between interrupts.
     masking: CovMasking,
+
+    /// Controls whether interrupts should be triggered by halts.
+    trigger_interrupt_on_halt: bool,
 
     /// The varnode associated with the XPSR register.
     xpsr: pcode::VarNode,
@@ -570,6 +576,7 @@ impl FuzzwareEnvironment {
             uc_ptr: std::ptr::null_mut(),
             saved_prev: None,
             masking: CovMasking::None,
+            trigger_interrupt_on_halt: false,
             xpsr: pcode::VarNode::NONE,
             fuzzware_exit: None,
         }
@@ -630,24 +637,29 @@ impl FuzzwareEnvironment {
         const IMPROVED_SLEEP_INTERRUPT_TRIGGERING: bool = false;
 
         if IMPROVED_SLEEP_INTERRUPT_TRIGGERING {
-            unsafe {
-                let num_triggers = (*(*self.uc_ptr).fw).num_triggers_inuse as usize;
-                let triggers = &mut (*(*self.uc_ptr).fw).triggers[..num_triggers];
-                if let Some(trigger) = triggers
-                    .iter_mut()
-                    .find(|trigger| trigger.fuzz_mode == fuzzware::IRQ_TRIGGER_MODE_TIME as u16)
-                {
-                    fuzzware::interrupt_trigger_timer_cb(
-                        self.uc_ptr,
-                        0,
-                        (trigger as *mut fuzzware::InterruptTrigger).cast(),
-                    );
-                }
-            }
+            self.force_trigger_next_time_based_interrupt();
         }
         else {
             // Warp time forward until the next timer event.
             unsafe { unicorn_api::set_timer_countdown((*self.uc_ptr).ctx, 1) };
+        }
+    }
+
+    /// Triggers the next time based interrupt to occur (if time-based interrupts are enabled).
+    fn force_trigger_next_time_based_interrupt(&mut self) {
+        unsafe {
+            let num_triggers = (*(*self.uc_ptr).fw).num_triggers_inuse as usize;
+            let triggers = &mut (*(*self.uc_ptr).fw).triggers[..num_triggers];
+            if let Some(trigger) = triggers
+                .iter_mut()
+                .find(|trigger| trigger.fuzz_mode == fuzzware::IRQ_TRIGGER_MODE_TIME as u16)
+            {
+                fuzzware::interrupt_trigger_timer_cb(
+                    self.uc_ptr,
+                    0,
+                    (trigger as *mut fuzzware::InterruptTrigger).cast(),
+                );
+            }
         }
     }
 }
@@ -660,7 +672,8 @@ impl icicle_vm::cpu::elf::ElfLoader for FuzzwareEnvironment {
 impl icicle_vm::cpu::Environment for FuzzwareEnvironment {
     fn load(&mut self, cpu: &mut Cpu, path: &[u8]) -> Result<(), String> {
         use icicle_vm::cpu::elf::ElfLoader;
-        let _metadata = self.load_elf(cpu, path)?;
+        let metadata = self.load_elf(cpu, path)?;
+        self.debug_info = metadata.debug_info;
         Ok(())
     }
 
@@ -693,8 +706,14 @@ impl icicle_vm::cpu::Environment for FuzzwareEnvironment {
                     tracing::debug!("Deadlock in IRQ: {exception_number}");
                     return Some(VmExit::Deadlock);
                 }
-                // @todo: consider treating this in the same way as a sleep event?
-                return Some(VmExit::InstructionLimit);
+
+                if self.trigger_interrupt_on_halt {
+                    self.force_trigger_next_time_based_interrupt();
+                    cpu.exception.clear();
+                }
+                else {
+                    return Some(VmExit::InstructionLimit);
+                }
             }
             ExceptionCode::CodeNotTranslated
             | ExceptionCode::InvalidInstruction

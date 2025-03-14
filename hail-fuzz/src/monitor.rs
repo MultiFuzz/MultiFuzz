@@ -5,13 +5,14 @@ use std::{
 };
 
 use anyhow::Context;
-use hashbrown::HashMap;
+use hashbrown::{hash_map::Entry, HashMap};
 use icicle_fuzzing::CrashKind;
 use icicle_vm::{Vm, VmExit};
 
 use crate::{
     dictionary::DictionaryItem,
     input::{CortexmMultiStream, StreamKey},
+    queue::InputId,
     Fuzzer, Stage, State,
 };
 
@@ -206,10 +207,10 @@ impl Default for LocalStats {
 impl LocalStats {
     pub fn update(&mut self, fuzzer: &Fuzzer) {
         self.execs += 1;
-        if fuzzer.state.was_crash {
+        if fuzzer.state.was_crash() {
             self.crashes += 1;
         }
-        if fuzzer.state.was_hang {
+        if fuzzer.state.was_hang() {
             self.timeouts += 1;
         }
         self.maybe_sync(fuzzer);
@@ -234,12 +235,13 @@ impl LocalStats {
 #[derive(serde::Serialize)]
 struct CrashEntry {
     id: usize,
+    time: std::time::Duration,
+    parent: Option<InputId>,
     count: usize,
     exit: String,
     callstack: Vec<u64>,
 }
 
-#[derive(Default)]
 pub struct CrashLogger {
     crashes: HashMap<String, CrashEntry>,
     hangs: HashMap<String, CrashEntry>,
@@ -249,11 +251,14 @@ pub struct CrashLogger {
     /// A limit on the total number of crashes/hangs to save.
     save_limit: usize,
     print_crashes: bool,
+    start_time: std::time::Instant,
 }
 
 impl CrashLogger {
     pub fn new(config: &crate::Config) -> anyhow::Result<Self> {
         Ok(Self {
+            crashes: HashMap::new(),
+            hangs: HashMap::new(),
             metadata_path: config.workdir.join("crashes.json"),
             crash_dir: config.fuzzer.save_crashes.then(|| config.workdir.join("crashes")),
             hang_dir: config.fuzzer.save_hangs.then(|| config.workdir.join("hangs")),
@@ -262,27 +267,39 @@ impl CrashLogger {
                 .and_then(|x| x.parse().ok())
                 .unwrap_or(usize::MAX),
             print_crashes: icicle_fuzzing::parse_bool_env("PRINT_CRASHES")?.unwrap_or(true),
-            ..Self::default()
+            start_time: std::time::Instant::now(),
         })
     }
 
-    pub fn is_new(&mut self, vm: &mut Vm, exit: VmExit) -> bool {
-        let dst = match CrashKind::from(exit) {
+    pub fn add_if_new(&mut self, vm: &mut Vm, state: &State) -> Option<String> {
+        let dst = match CrashKind::from(state.exit) {
+            CrashKind::Halt => return None,
             CrashKind::Hang => &mut self.hangs,
             _ => &mut self.crashes,
         };
 
         let id = dst.len();
-        let mut is_new = false;
-        let entry = dst.entry(icicle_fuzzing::gen_crash_key(vm, exit)).or_insert_with(|| {
-            is_new = true;
-            // @todo: consider truncating to handle unbounded recursion?
-            let callstack = vm.get_debug_callstack();
-            CrashEntry { id, count: 0, exit: format!("{exit:?}"), callstack }
-        });
-        entry.count += 1;
-
-        is_new
+        let key = icicle_fuzzing::gen_crash_key(vm, state.exit);
+        match dst.entry(key) {
+            Entry::Occupied(mut entry) => {
+                entry.get_mut().count += 1;
+                None
+            }
+            Entry::Vacant(slot) => {
+                // @todo: consider truncating to handle unbounded recursion?
+                let callstack = vm.get_debug_callstack();
+                let key = slot.key().clone();
+                slot.insert(CrashEntry {
+                    id,
+                    parent: state.parent,
+                    time: self.start_time.elapsed(),
+                    count: 1,
+                    exit: format!("{:?}", state.exit),
+                    callstack,
+                });
+                Some(key)
+            }
+        }
     }
 
     pub fn save(

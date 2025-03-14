@@ -4,14 +4,23 @@ use icicle_cortexm::mmio::{FuzzwareMmioHandler, GlobalMmioSource};
 
 use crate::input::{MultiStream, StreamKey};
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub struct TraceEntry {
+    pub icount: u64,
     pub pc: u64,
     pub sp: u64,
-    pub icount: u64,
     pub fuzz_offset: u32,
     pub last_read: u32,
     pub last_value: u32,
+}
+
+impl std::fmt::Debug for TraceEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "pc={:#0x}, sp={:#0x}, icount={}, fuzz_offset={}, last_read={:#0x}={:#0x}",
+            self.pc, self.sp, self.icount, self.fuzz_offset, self.last_read, self.last_value,
+        ))
+    }
 }
 
 pub trait IoTracer {

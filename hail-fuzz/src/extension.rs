@@ -9,7 +9,7 @@ use crate::{
     input::{MultiStream, StreamKey},
     monitor,
     mutations::extend_input_by_rand,
-    DictionaryRef, Fuzzer, FuzzerStage, Snapshot, Stage, StageExit, StageStartError,
+    DictionaryRef, Fuzzer, FuzzerStage, Snapshot, Stage, StageExit,
 };
 
 pub(crate) struct MultiStreamExtendStage {
@@ -41,9 +41,6 @@ pub(crate) struct MultiStreamExtendStage {
     /// The number of remaining attempts when to try i2s random replacement for.
     i2s_replacement_attempts: i32,
 
-    /// A snapshot of the emulator state after executing `current_input`.
-    snapshot: Snapshot,
-
     /// The amount of energy assigned to this input.
     energy: usize,
 
@@ -53,27 +50,15 @@ pub(crate) struct MultiStreamExtendStage {
 }
 
 impl MultiStreamExtendStage {
-    fn start(fuzzer: &mut Fuzzer) -> Result<Self, StageStartError> {
+    fn start(fuzzer: &mut Fuzzer) -> Result<Self, StageExit> {
         fuzzer.copy_current_input();
 
         let mut attempts = calculate_energy(fuzzer) as usize;
 
-        // Perform initial execution of current input to obtain a snapshot.
-        Snapshot::restore_initial(fuzzer);
-        fuzzer.state.input.seek_to_start();
-        fuzzer.write_input_to_target().unwrap();
-        let exit = fuzzer.execute().ok_or(StageStartError::Interrupted)?;
-        if !matches!(exit, VmExit::UnhandledException((ExceptionCode::ReadWatch, _))) {
-            // Never attempt to extend inputs that timeout.
-            tracing::trace!("attempted to extend hanging input");
-            return Err(StageStartError::Skip);
-        }
-        fuzzer.auto_trim_input()?;
-
+        let last_read = Self::crate_snapshot_after(fuzzer, 0)?;
         let mut end_addrs = HashSet::new();
         end_addrs.insert(fuzzer.vm.cpu.read_pc());
 
-        let last_read = fuzzer.state.input.last_read.ok_or(StageStartError::Skip)?;
         let mut streams_to_mutate = hashbrown::HashMap::new();
 
         let factor = fuzzer.get_extension_factor(last_read);
@@ -93,9 +78,9 @@ impl MultiStreamExtendStage {
             attempts *= config::INCREASE_EXTENSIONS_ON_FIRST_EXEC_FACTOR;
         }
 
-        tracing::trace!(
-            "[{}] {exit:?}@{:#x} (factor={factor}, max extensions={}, limit={extension_limit}) len={}, attempts={attempts}, icount={}",
-            fuzzer.input_id.unwrap_or(usize::MAX),
+        tracing::debug!(
+            "[{}] {last_read:#x}@{:#x} (factor={factor}, max extensions={}, limit={extension_limit}) len={}, attempts={attempts}, icount={}",
+            fuzzer.input_id.unwrap_or(0),
             fuzzer.vm.cpu.read_pc(),
             2_u32.pow(log2_max_extensions),
             fuzzer.state.input.total_bytes(),
@@ -105,15 +90,12 @@ impl MultiStreamExtendStage {
             fuzzer.corpus[id].metadata.length_extension_rounds += 1;
         }
 
-        let snapshot = Snapshot::capture(fuzzer);
-
         Ok(Self {
             current_input: fuzzer.state.input.clone(),
-            local_depth: 0,
+            local_depth: 1,
             log2_max_extensions,
             extension_limit,
             new_starting_inputs: VecDeque::new(),
-            snapshot,
             rare_input: None,
             i2s_data: None,
             i2s_replacement_attempts: 0,
@@ -125,7 +107,7 @@ impl MultiStreamExtendStage {
     }
 
     fn exec_one(&mut self, fuzzer: &mut Fuzzer) -> Option<VmExit> {
-        self.snapshot.restore(fuzzer);
+        Snapshot::restore_prefix(fuzzer);
         fuzzer.state.input.clone_from(&self.current_input);
 
         match self.i2s_data.as_mut() {
@@ -190,14 +172,16 @@ impl MultiStreamExtendStage {
         }
     }
 
-    fn prepare_new_input(&mut self, fuzzer: &mut Fuzzer) -> Option<()> {
+    fn prepare_new_input(&mut self, fuzzer: &mut Fuzzer) -> Result<(), StageExit> {
         const RARE_EXTENSIONS: bool = true;
         if !RARE_EXTENSIONS {
-            return None;
+            return Err(StageExit::Skip);
         }
 
         if let Some((_, input)) = self.rare_input.take() {
-            self.crate_snapshot_after(fuzzer, input)?;
+            fuzzer.state.input.clone_from(&input);
+            Self::crate_snapshot_after(fuzzer, self.local_depth)?;
+            self.current_input.clone_from(&fuzzer.state.input);
 
             // Occasionally decide to switch to input-to-state mode during length extension.
             const MULTI_STREAM_EXTEND_I2S_STAGE: bool = true;
@@ -205,47 +189,73 @@ impl MultiStreamExtendStage {
                 && MULTI_STREAM_EXTEND_I2S_STAGE
                 && fuzzer.rng.gen_ratio(1, 20)
             {
-                self.i2s_data = Some(i2s::I2SRandomReplacement::init(fuzzer)?);
+                self.i2s_data =
+                    Some(i2s::I2SRandomReplacement::init(fuzzer).ok_or(StageExit::Skip)?);
                 self.i2s_replacement_attempts = 1000;
             }
 
+            // Refresh the attempt count.
             self.attempts = self.energy;
-            return Some(());
+            return Ok(());
         }
 
         if let Some((depth, input)) = self.new_starting_inputs.pop_back() {
-            self.crate_snapshot_after(fuzzer, input)?;
+            fuzzer.state.input.clone_from(&input);
+            Self::crate_snapshot_after(fuzzer, self.local_depth)?;
+            self.current_input.clone_from(&fuzzer.state.input);
             self.local_depth = depth + 1;
             self.attempts = (self.energy / 100).max(1);
-            return Some(());
+            return Ok(());
         }
 
-        None
+        Err(StageExit::Skip)
     }
 
-    /// Creates a new snapshot after executing `input`.
-    fn crate_snapshot_after(&mut self, fuzzer: &mut Fuzzer, input: MultiStream) -> Option<()> {
-        fuzzer.state.input.clone_from(&input);
-        fuzzer.state.input.seek_to_start();
-
+    /// Creates a new snapshot after executing the current input.
+    fn crate_snapshot_after(fuzzer: &mut Fuzzer, depth: u32) -> Result<u64, StageExit> {
+        // Perform initial execution of current input to obtain a snapshot.
         Snapshot::restore_initial(fuzzer);
+        fuzzer.state.input.seek_to_start();
         fuzzer.write_input_to_target().unwrap();
-        let exit = fuzzer.execute()?;
-        fuzzer.auto_trim_input().ok()?;
+        let exit = fuzzer.execute().ok_or(StageExit::Interrupted)?;
 
-        tracing::trace!(
-            "[{}] new extension starting point (depth={}): {exit:?}@{:#x}, len={}, icount={}",
+        let VmExit::UnhandledException((ExceptionCode::ReadWatch, exit_address)) = exit
+        else {
+            // Never attempt to extend inputs that do not end with input exhaustion.
+            tracing::trace!("attempted to extend hanging input");
+            return Err(StageExit::Skip);
+        };
+        fuzzer.auto_trim_input()?;
+
+        // Currently we are unable to resume the emulator at the point an interrupt is injected, so
+        // rerun the input stopping one instruction early.
+        if crate::utils::is_interrupt_stream(exit_address) {
+            let until_icount = fuzzer.vm.cpu.icount() - 1;
+            tracing::trace!(
+                "extending snapshot on interrupt stream, adjusting snapshot to start at: {until_icount}"
+            );
+
+            Snapshot::restore_initial(fuzzer);
+            fuzzer.state.input.seek_to_start();
+            fuzzer.write_input_to_target().unwrap();
+            let exit = fuzzer.execute_with_limit(until_icount).ok_or(StageExit::Interrupted)?;
+
+            assert!(matches!(exit, VmExit::InstructionLimit));
+            fuzzer.auto_trim_input()?;
+        }
+
+        tracing::debug!(
+            "[{}] Extension (depth={depth}) starting at: {exit:?}@{:#x}, len={}, icount={}",
             fuzzer.input_id.unwrap_or(0),
-            self.local_depth,
             fuzzer.vm.cpu.read_pc(),
             fuzzer.state.input.total_bytes(),
             fuzzer.state.instructions,
         );
 
-        self.snapshot = Snapshot::capture(fuzzer);
-        self.current_input.clone_from(&fuzzer.state.input);
+        fuzzer.vm.cpu.exception.clear();
+        fuzzer.prefix_snapshot = Some(Snapshot::capture(fuzzer));
 
-        Some(())
+        Ok(exit_address)
     }
 }
 
@@ -259,9 +269,10 @@ impl FuzzerStage for MultiStreamExtendStage {
         loop {
             if state.attempts == 0 {
                 // Check if there any pending partial extensions to try.
-                if state.prepare_new_input(fuzzer).is_none() {
+                if let Err(exit) = state.prepare_new_input(fuzzer) {
                     // Done with this stage.
-                    return Ok(StageExit::Finished);
+                    fuzzer.prefix_snapshot = None;
+                    return Ok(exit);
                 }
             }
             state.attempts -= 1;

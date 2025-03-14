@@ -62,6 +62,7 @@ typedef enum uc_err {
     UC_ERR_NO_FUZZ_CONSUMPTION, // Exceeded limit for the number of blocks without consuming fuzzer input
     UC_ERR_INTERRUPT_LIMIT, // Exceeded maximum number of interrupts triggered
     UC_ERR_NVIC_ASSERTION, // Hit an NVIC assertion
+    UC_ERR_NVIC_RESET, // Hit an NVIC reset
 } uc_err;
 
 extern const char *uc_strerror(uc_err code);

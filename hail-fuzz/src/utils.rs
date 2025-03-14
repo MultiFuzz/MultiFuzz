@@ -1,9 +1,10 @@
 use std::time::Duration;
 
 use anyhow::Context;
-use rand::{seq::SliceRandom, Rng};
+use hashbrown::HashMap;
+use rand::{Rng, seq::SliceRandom};
 
-use crate::{input::MultiStream, Fuzzer, Stage, StreamKey};
+use crate::{Fuzzer, Stage, StreamKey, input::MultiStream};
 
 /// The maximum number of random bytes to generate for a completely random input.
 const RANDOM_MAX: usize = 1024;
@@ -185,7 +186,9 @@ pub(crate) fn get_stream_weights(
     let colorization_rates: Vec<_> = streams
         .iter()
         .map(|(key, len)| {
-            color.get(key).map_or(1.0, |x| *x as f64 / *len.min(&crate::i2s::MAX_STREAM_LEN) as f64)
+            color
+                .get(key)
+                .map_or(1.0, |x| *x as f64 / *len.min(&fuzzer.features.max_i2s_bytes) as f64)
         })
         .collect();
     let weights = colorization_rates
@@ -208,6 +211,38 @@ pub(crate) fn get_stream_weights(
 
 pub fn rand_pow2<R: Rng>(mut rng: R, log2_max: u32) -> u64 {
     2_f32.powf(1.0 + (rng.gen::<f32>() * (log2_max as f32 - 1.0))).floor() as u64
+}
+
+/// Returns a count of the number of bytes within each stream shared with the parent input.
+pub fn count_parent_prefix(
+    fuzzer: &Fuzzer,
+    input_id: usize,
+    extension_only: bool,
+) -> HashMap<u64, usize> {
+    let input = &fuzzer.corpus[input_id];
+
+    if !input.metadata.stage.is_extension() && extension_only {
+        return HashMap::new();
+    }
+    let Some(parent) = input.metadata.parent_id
+    else {
+        return HashMap::new();
+    };
+    let parent_data = &fuzzer.corpus[parent].data;
+
+    let mut extensions = HashMap::new();
+    for (addr, stream) in &input.data.streams {
+        let Some(parent_stream) = parent_data.streams.get(addr)
+        else {
+            continue;
+        };
+
+        let shared_prefix =
+            stream.bytes.iter().zip(&parent_stream.bytes).take_while(|(a, b)| a == b).count();
+        extensions.insert(*addr, shared_prefix);
+    }
+
+    extensions
 }
 
 #[cfg(test)]
@@ -276,4 +311,9 @@ mod tests {
         replace_slice_strided(&mut input, &[5, 6], 4, 1);
         assert_eq!(input, vec![1, 2, 3, 4, 5, 6]);
     }
+}
+
+/// Streams related to interrupts should not be used for i2s replacement.
+pub fn is_interrupt_stream(addr: u64) -> bool {
+    addr == icicle_cortexm::IRQ_NUMBER_ADDR || addr == icicle_cortexm::TIMER_CHOICE_ADDR
 }

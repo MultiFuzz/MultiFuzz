@@ -1,10 +1,10 @@
 use std::{any::Any, cell::RefCell};
 
 use icicle_fuzzing::{
-    coverage::{ExactBlockCountCoverageInjector, ExactBlockCoverageInjector},
     FuzzConfig,
+    coverage::{ExactBlockCountCoverageInjector, ExactBlockCoverageInjector},
 };
-use icicle_vm::{cpu::StoreRef, InjectorRef, Vm};
+use icicle_vm::{InjectorRef, Vm, cpu::StoreRef};
 
 pub const MAP_SIZE: usize = 0x10000;
 
@@ -450,6 +450,13 @@ impl BlockCoverage {
             mapping.sort_by_key(|(_, index)| *index);
         }
     }
+
+    /// Translate coverage bits to real blocks.
+    pub fn blocks_for(&self, vm: &mut Vm, bits: &[u32]) -> Vec<u64> {
+        self.update_mapping_cache(vm);
+        let mapping = self.mapping_cache.borrow();
+        bits.iter().map(|x| mapping.get(*x as usize).map_or(0, |(addr, _)| *addr)).collect()
+    }
 }
 
 impl Coverage for BlockCoverage {
@@ -509,26 +516,36 @@ impl Coverage for BlockCoverage {
     }
 
     fn serialize(&self, vm: &mut Vm, out: &mut String) {
-        use std::fmt::Write;
-
         self.update_mapping_cache(vm);
 
         if self.pack_bits {
-            let mut entries: Vec<_> = self.mapping_cache.borrow().iter().copied().collect();
-            entries.sort_unstable();
-            for (addr, _) in entries {
-                writeln!(out, "{addr:#x}").unwrap();
-            }
+            let data: Vec<_> = self
+                .mapping_cache
+                .borrow()
+                .iter()
+                .copied()
+                .map(|(addr, idx)| CoverageEntry { idx, addr, count: 1 })
+                .collect();
+            *out = serde_json::to_string(&data).unwrap();
         }
         else {
             let mapping = self.mapping_cache.borrow();
+            let mut data = vec![];
             for (i, byte) in self.hit.iter().flat_map(|x| x.to_le_bytes()).enumerate() {
-                let Some((addr, _)) = mapping.get(i)
+                let Some((addr, idx)) = mapping.get(i)
                 else {
                     continue;
                 };
-                writeln!(out, "{addr:#x} = {byte:#x}").unwrap();
+                data.push(CoverageEntry { idx: *idx, addr: *addr, count: byte });
             }
+            *out = serde_json::to_string(&data).unwrap();
         }
     }
+}
+
+#[derive(serde::Serialize)]
+struct CoverageEntry {
+    idx: usize,
+    addr: u64,
+    count: u8,
 }
