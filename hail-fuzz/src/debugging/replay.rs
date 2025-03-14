@@ -136,9 +136,10 @@ fn replay_bench(mut vm: Vm, mut target: CortexmMultiStream, trials: u64) -> anyh
     vm.recompile();
 
     // Dump JIT function ID -> guest address mapping for analysis.
-    vm.jit
-        .dump_jit_mapping("jit_table.txt".as_ref())
-        .context("failed to save JIT mapping table")?;
+    if let Err(e) = vm.jit.dump_jit_mapping("jit_table.txt".as_ref(), vm.env.debug_info().unwrap())
+    {
+        tracing::warn!("Failed to dump JIT table: {e}")
+    }
 
     let expected_icount = vm.cpu.icount();
     eprintln!("[icicle] exited with: {exit:?} (icount = {expected_icount})");
