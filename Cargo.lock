@@ -477,8 +477,7 @@ checksum = "a0d2fde1f7b3d48b8395d5f2de76c18a528bd6a9cdde438df747bfcba3e05d6f"
 [[package]]
 name = "gdbstub"
 version = "0.7.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8062b93565ea9fe2e60a0dd3c252f0d48c27cf223dad7ead028e361181a2c1a5"
+source = "git+https://github.com/mchesser/gdbstub/#2ac5090909a71d560497f3e7529949d4a63a3883"
 dependencies = [
  "bitflags 2.9.0",
  "cfg-if",
@@ -491,8 +490,7 @@ dependencies = [
 [[package]]
 name = "gdbstub_arch"
 version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "328a9e9425db13770d0d11de6332a608854266e44c53d12776be7b4aa427e3de"
+source = "git+https://github.com/mchesser/gdbstub/#2ac5090909a71d560497f3e7529949d4a63a3883"
 dependencies = [
  "gdbstub",
  "num-traits",
@@ -611,7 +609,7 @@ dependencies = [
 [[package]]
 name = "icicle-cpu"
 version = "0.1.0"
-source = "git+https://github.com/icicle-emu/icicle-emu#6e9fd3e34aec440ac92c1f49f4a70fc288949de9"
+source = "git+https://github.com/icicle-emu/icicle-emu?branch=gdbstub-backports#92d0ed52a332bfdc2ba3240ac0fa36f4304b7ebd"
 dependencies = [
  "addr2line",
  "ahash",
@@ -631,7 +629,7 @@ dependencies = [
 [[package]]
 name = "icicle-fuzzing"
 version = "0.1.0"
-source = "git+https://github.com/icicle-emu/icicle-emu#6e9fd3e34aec440ac92c1f49f4a70fc288949de9"
+source = "git+https://github.com/icicle-emu/icicle-emu?branch=gdbstub-backports#92d0ed52a332bfdc2ba3240ac0fa36f4304b7ebd"
 dependencies = [
  "ahash",
  "anyhow",
@@ -651,7 +649,7 @@ dependencies = [
 [[package]]
 name = "icicle-gdb"
 version = "0.1.0"
-source = "git+https://github.com/icicle-emu/icicle-emu#6e9fd3e34aec440ac92c1f49f4a70fc288949de9"
+source = "git+https://github.com/icicle-emu/icicle-emu?branch=gdbstub-backports#92d0ed52a332bfdc2ba3240ac0fa36f4304b7ebd"
 dependencies = [
  "anyhow",
  "gdbstub",
@@ -667,7 +665,7 @@ dependencies = [
 [[package]]
 name = "icicle-jit"
 version = "0.2.0"
-source = "git+https://github.com/icicle-emu/icicle-emu#6e9fd3e34aec440ac92c1f49f4a70fc288949de9"
+source = "git+https://github.com/icicle-emu/icicle-emu?branch=gdbstub-backports#92d0ed52a332bfdc2ba3240ac0fa36f4304b7ebd"
 dependencies = [
  "cranelift",
  "cranelift-codegen",
@@ -685,7 +683,7 @@ dependencies = [
 [[package]]
 name = "icicle-linux"
 version = "0.1.0"
-source = "git+https://github.com/icicle-emu/icicle-emu#6e9fd3e34aec440ac92c1f49f4a70fc288949de9"
+source = "git+https://github.com/icicle-emu/icicle-emu?branch=gdbstub-backports#92d0ed52a332bfdc2ba3240ac0fa36f4304b7ebd"
 dependencies = [
  "bitflags 2.9.0",
  "bstr",
@@ -701,15 +699,16 @@ dependencies = [
 [[package]]
 name = "icicle-mem"
 version = "0.3.0"
-source = "git+https://github.com/icicle-emu/icicle-emu#6e9fd3e34aec440ac92c1f49f4a70fc288949de9"
+source = "git+https://github.com/icicle-emu/icicle-emu?branch=gdbstub-backports#92d0ed52a332bfdc2ba3240ac0fa36f4304b7ebd"
 dependencies = [
+ "ahash",
  "tracing",
 ]
 
 [[package]]
 name = "icicle-vm"
 version = "0.2.0"
-source = "git+https://github.com/icicle-emu/icicle-emu#6e9fd3e34aec440ac92c1f49f4a70fc288949de9"
+source = "git+https://github.com/icicle-emu/icicle-emu?branch=gdbstub-backports#92d0ed52a332bfdc2ba3240ac0fa36f4304b7ebd"
 dependencies = [
  "anyhow",
  "icicle-cpu",
@@ -972,7 +971,7 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 [[package]]
 name = "pcode"
 version = "0.2.0"
-source = "git+https://github.com/icicle-emu/icicle-emu#6e9fd3e34aec440ac92c1f49f4a70fc288949de9"
+source = "git+https://github.com/icicle-emu/icicle-emu?branch=gdbstub-backports#92d0ed52a332bfdc2ba3240ac0fa36f4304b7ebd"
 
 [[package]]
 name = "petgraph"
@@ -1305,7 +1304,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 [[package]]
 name = "sleigh-compile"
 version = "0.3.0"
-source = "git+https://github.com/icicle-emu/icicle-emu#6e9fd3e34aec440ac92c1f49f4a70fc288949de9"
+source = "git+https://github.com/icicle-emu/icicle-emu?branch=gdbstub-backports#92d0ed52a332bfdc2ba3240ac0fa36f4304b7ebd"
 dependencies = [
  "pcode",
  "serde",
@@ -1318,12 +1317,12 @@ dependencies = [
 [[package]]
 name = "sleigh-parse"
 version = "0.3.0"
-source = "git+https://github.com/icicle-emu/icicle-emu#6e9fd3e34aec440ac92c1f49f4a70fc288949de9"
+source = "git+https://github.com/icicle-emu/icicle-emu?branch=gdbstub-backports#92d0ed52a332bfdc2ba3240ac0fa36f4304b7ebd"
 
 [[package]]
 name = "sleigh-runtime"
 version = "0.1.0"
-source = "git+https://github.com/icicle-emu/icicle-emu#6e9fd3e34aec440ac92c1f49f4a70fc288949de9"
+source = "git+https://github.com/icicle-emu/icicle-emu?branch=gdbstub-backports#92d0ed52a332bfdc2ba3240ac0fa36f4304b7ebd"
 dependencies = [
  "pcode",
  "sleigh-parse",

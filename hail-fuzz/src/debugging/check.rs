@@ -190,7 +190,7 @@ fn debug_cnc(vm: &mut Vm, debug: DebugConfig) {
     }
 
     const SET_SETTINGS_DECIMAL_PLACES: u64 = 0x8004f8a;
-    let reg_r2 = vm.cpu.arch.sleigh.get_reg("r2").unwrap().var;
+    let reg_r2 = vm.cpu.arch.sleigh.get_varnode("r2").unwrap();
     let out = debug;
     vm.hook_address(SET_SETTINGS_DECIMAL_PLACES, move |cpu, _addr| {
         let value = cpu.read_reg(reg_r2);
@@ -201,10 +201,10 @@ fn debug_cnc(vm: &mut Vm, debug: DebugConfig) {
 }
 
 fn debug_gateway(vm: &mut Vm, debug: DebugConfig) {
-    let reg_r0 = vm.cpu.arch.sleigh.get_reg("r0").unwrap().var;
-    let reg_r1 = vm.cpu.arch.sleigh.get_reg("r1").unwrap().var;
-    let reg_r2 = vm.cpu.arch.sleigh.get_reg("r2").unwrap().var;
-    let reg_r3 = vm.cpu.arch.sleigh.get_reg("r3").unwrap().var;
+    let reg_r0 = vm.cpu.arch.sleigh.get_varnode("r0").unwrap();
+    let reg_r1 = vm.cpu.arch.sleigh.get_varnode("r1").unwrap();
+    let reg_r2 = vm.cpu.arch.sleigh.get_varnode("r2").unwrap();
+    let reg_r3 = vm.cpu.arch.sleigh.get_varnode("r3").unwrap();
 
     // User provided `pin` argument is not bounds checked.
     const SET_PIN_STATE: u64 = 0x08002fc6;
@@ -320,8 +320,8 @@ fn debug_gateway(vm: &mut Vm, debug: DebugConfig) {
 }
 
 pub fn debug_heatpress(vm: &mut Vm, debug: DebugConfig) {
-    let reg_r4 = vm.cpu.arch.sleigh.get_reg("r4").unwrap().var;
-    let reg_r6 = vm.cpu.arch.sleigh.get_reg("r6").unwrap().var;
+    let reg_r4 = vm.cpu.arch.sleigh.get_varnode("r4").unwrap();
+    let reg_r6 = vm.cpu.arch.sleigh.get_varnode("r6").unwrap();
 
     // Buffer overflow in `get_FC3`
     const GET_FC3_STORE: u64 = 0x80432;
@@ -358,8 +358,8 @@ fn debug_zephyr_socket_can(vm: &mut Vm, debug: DebugConfig) {
     }
 
     const SET_FILTER: u64 = 0x080058e6;
-    let reg_r3 = vm.cpu.arch.sleigh.get_reg("r3").unwrap().var;
-    let reg_r6 = vm.cpu.arch.sleigh.get_reg("r6").unwrap().var;
+    let reg_r3 = vm.cpu.arch.sleigh.get_varnode("r3").unwrap();
+    let reg_r6 = vm.cpu.arch.sleigh.get_varnode("r6").unwrap();
     let out = debug;
     vm.hook_address(SET_FILTER, move |cpu, _addr| {
         let filter_index = cpu.read_reg(reg_r6);
@@ -383,7 +383,7 @@ fn debug_gps_tracker(vm: &mut Vm, debug: DebugConfig) {
 
     // Stack overflow in `USB_SendStringDescriptor`
     const USB_SEND_STRING_DESCRIPTOR: u64 = 0x8424c;
-    let reg_r1 = vm.cpu.arch.sleigh.get_reg("r1").unwrap().var;
+    let reg_r1 = vm.cpu.arch.sleigh.get_varnode("r1").unwrap();
     vm.hook_address(USB_SEND_STRING_DESCRIPTOR, move |cpu, _addr| {
         let w_len = cpu.read_reg(reg_r1);
         if w_len > 0xc000 {
@@ -399,7 +399,7 @@ fn debug_usb(vm: &mut Vm, debug: DebugConfig) {
     }
 
     const FN_USB_HANDLE_FRAME: u64 = 0x800fc2c;
-    let reg_r2 = vm.cpu.arch.sleigh.get_reg("r2").unwrap().var;
+    let reg_r2 = vm.cpu.arch.sleigh.get_varnode("r2").unwrap();
     let out = debug.clone();
     vm.hook_address(FN_USB_HANDLE_FRAME, move |cpu, _addr| {
         let endpoint = cpu.read_reg(reg_r2);
@@ -409,7 +409,7 @@ fn debug_usb(vm: &mut Vm, debug: DebugConfig) {
     });
 
     const FN_EXTRACT_FIFO: u64 = 0x800d658;
-    let reg_r3 = vm.cpu.arch.sleigh.get_reg("r3").unwrap().var;
+    let reg_r3 = vm.cpu.arch.sleigh.get_varnode("r3").unwrap();
     let out = debug.clone();
     vm.hook_address(FN_EXTRACT_FIFO + 0x6, move |cpu, _addr| {
         let len = cpu.read_reg(reg_r3);
@@ -419,7 +419,7 @@ fn debug_usb(vm: &mut Vm, debug: DebugConfig) {
     });
 
     const CALL_NEW_UART_SETTINGS: u64 = 0x8011c10;
-    let reg_r1 = vm.cpu.arch.sleigh.get_reg("r1").unwrap().var;
+    let reg_r1 = vm.cpu.arch.sleigh.get_varnode("r1").unwrap();
     let out = debug.clone();
     vm.hook_address(CALL_NEW_UART_SETTINGS, move |cpu, _addr| {
         let interface = cpu.read_reg(reg_r1);
@@ -461,7 +461,7 @@ fn debug_lowpan(vm: &mut Vm, debug: DebugConfig) {
         register_char_out_printer(vm, USART_SERIAL_PUTCHAR, "r1");
     }
 
-    let reg_r0 = vm.cpu.arch.sleigh.get_reg("r0").unwrap().var;
+    let reg_r0 = vm.cpu.arch.sleigh.get_varnode("r0").unwrap();
 
     // Fragment offset is not bounds-checked in `sicslowpan::input`
     let out = debug.clone();
@@ -491,7 +491,7 @@ fn debug_riot_ccn_lite_relay(vm: &mut Vm, debug: DebugConfig) -> Option<()> {
         register_write_printer(vm, stdio_write, "r0", "r1");
     }
 
-    let reg_r0 = vm.cpu.arch.sleigh.get_reg("r0").unwrap().var;
+    let reg_r0 = vm.cpu.arch.sleigh.get_varnode("r0").unwrap();
 
     // Use after free for interest timeout.
     let ccnl_face_remove_free = vm.env.lookup_symbol("ccnl_face_remove")? + 0xa6;
@@ -550,7 +550,7 @@ fn debug_riot_gnrc_networking(vm: &mut Vm, debug: DebugConfig) -> Option<()> {
 
 fn register_char_out_printer(vm: &mut Vm, char_out_ptr: u64, reg: &str) {
     tracing::debug!("registering `char_out({reg})` hook at {char_out_ptr:#x}");
-    let reg = vm.cpu.arch.sleigh.get_reg(reg).unwrap().var;
+    let reg = vm.cpu.arch.sleigh.get_varnode(reg).unwrap();
     vm.hook_address(char_out_ptr, move |cpu: &mut icicle_vm::cpu::Cpu, _| {
         let char = cpu.read_var::<u32>(reg);
         print!("{}", char as u8 as char);
@@ -560,7 +560,7 @@ fn register_char_out_printer(vm: &mut Vm, char_out_ptr: u64, reg: &str) {
 
 fn register_cstr_printer(vm: &mut Vm, addr: u64, reg: &str) {
     tracing::debug!("registering `cstr({reg})` hook at {addr:#x}");
-    let reg = vm.cpu.arch.sleigh.get_reg(reg).unwrap().var;
+    let reg = vm.cpu.arch.sleigh.get_varnode(reg).unwrap();
     let mut buf = [0; 64];
     vm.hook_address(addr, move |cpu: &mut icicle_vm::cpu::Cpu, _| {
         let ptr = cpu.read_var::<u32>(reg) as u64;
@@ -578,8 +578,8 @@ fn read_cstr<'a>(buf: &'a mut [u8], cpu: &mut icicle_vm::cpu::Cpu, ptr: u64) -> 
 
 fn register_write_printer(vm: &mut Vm, addr: u64, data_reg: &str, len_reg: &str) {
     tracing::debug!("registering `write(data={data_reg}, len={len_reg})` hook at {addr:#x}");
-    let data = vm.cpu.arch.sleigh.get_reg(data_reg).unwrap().var;
-    let len = vm.cpu.arch.sleigh.get_reg(len_reg).unwrap().var;
+    let data = vm.cpu.arch.sleigh.get_varnode(data_reg).unwrap();
+    let len = vm.cpu.arch.sleigh.get_varnode(len_reg).unwrap();
 
     let mut buf = vec![];
     vm.hook_address(addr, move |cpu: &mut icicle_vm::cpu::Cpu, _| {

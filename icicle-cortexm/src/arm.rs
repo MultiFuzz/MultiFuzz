@@ -19,11 +19,11 @@ pub(crate) struct XpsrHandler {
 impl XpsrHandler {
     pub fn new(cpu: &mut Cpu) -> Self {
         Self {
-            ng: cpu.arch.sleigh.get_reg("NG").unwrap().var,
-            zr: cpu.arch.sleigh.get_reg("ZR").unwrap().var,
-            cy: cpu.arch.sleigh.get_reg("CY").unwrap().var,
-            ov: cpu.arch.sleigh.get_reg("OV").unwrap().var,
-            xpsr: cpu.arch.sleigh.get_reg("xpsr").unwrap().var,
+            ng: cpu.arch.sleigh.get_varnode("NG").unwrap(),
+            zr: cpu.arch.sleigh.get_varnode("ZR").unwrap(),
+            cy: cpu.arch.sleigh.get_varnode("CY").unwrap(),
+            ov: cpu.arch.sleigh.get_varnode("OV").unwrap(),
+            xpsr: cpu.arch.sleigh.get_varnode("xpsr").unwrap(),
         }
     }
 }
@@ -274,8 +274,8 @@ pub(crate) fn add_arm_extras(vm: &mut Vm, nvic_changed_hook: pcode::HookId) {
 pub(crate) fn map_uc_to_varnodes(cpu: &Cpu) -> Vec<pcode::VarNode> {
     let mut vars = vec![pcode::VarNode::NONE; UC_ARM_REG_ENDING as usize];
 
-    let mut map = |id: uc_arm_reg::Type, name: &str| match cpu.arch.sleigh.get_reg(name) {
-        Some(reg) => vars[id as usize] = reg.var,
+    let mut map = |id: uc_arm_reg::Type, name: &str| match cpu.arch.sleigh.get_varnode(name) {
+        Some(reg) => vars[id as usize] = reg,
         None => eprintln!("{name} not found in Sleigh spec"),
     };
 

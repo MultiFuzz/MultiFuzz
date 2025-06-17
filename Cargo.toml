@@ -4,11 +4,11 @@ default-members = ["hail-fuzz"]
 resolver = "2"
 
 [workspace.dependencies]
-icicle-fuzzing = { git = "https://github.com/icicle-emu/icicle-emu" }
-icicle-gdb = { git = "https://github.com/icicle-emu/icicle-emu" }
-icicle-vm = { git = "https://github.com/icicle-emu/icicle-emu" }
-pcode = { git = "https://github.com/icicle-emu/icicle-emu" }
-sleigh-runtime = { git = "https://github.com/icicle-emu/icicle-emu" }
+icicle-fuzzing = { git = "https://github.com/icicle-emu/icicle-emu", branch = "gdbstub-backports" }
+icicle-gdb = { git = "https://github.com/icicle-emu/icicle-emu", branch = "gdbstub-backports" }
+icicle-vm = { git = "https://github.com/icicle-emu/icicle-emu", branch = "gdbstub-backports" }
+pcode = { git = "https://github.com/icicle-emu/icicle-emu", branch = "gdbstub-backports" }
+sleigh-runtime = { git = "https://github.com/icicle-emu/icicle-emu", branch = "gdbstub-backports" }
 anyhow = { version = "1.0.80", features = ["backtrace"] }
 tracing = { version = "0.1.40", default-features = false, features = ["release_max_level_trace"] }
 serde = { version = "1.0.193", features = ["derive"] }

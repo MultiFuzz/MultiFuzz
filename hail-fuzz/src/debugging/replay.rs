@@ -6,11 +6,11 @@ use std::{
 use anyhow::Context;
 use hashbrown::HashMap;
 
-use icicle_fuzzing::{parse_addr_or_symbol, FuzzTarget, Runnable};
-use icicle_vm::{cpu::ExceptionCode, Vm, VmExit};
+use icicle_fuzzing::{FuzzTarget, Runnable, parse_addr_or_symbol};
+use icicle_vm::{Vm, VmExit, cpu::ExceptionCode};
 
 use crate::{
-    config,
+    Config, config,
     coverage::Coverage,
     debugging::{modify_input, trace},
     i2s::log_cmplog_data,
@@ -18,7 +18,6 @@ use crate::{
     queue::InputMetadata,
     setup_vm,
     utils::load_json,
-    Config,
 };
 
 pub enum SaveMode {
@@ -107,7 +106,27 @@ pub fn replay(mut config: Config, path: &str) -> anyhow::Result<()> {
 
     // GDB mode.
     if let Ok(addr) = std::env::var("GDB_BIND") {
-        return icicle_gdb::listen_auto(&addr, vm);
+        let elf_path = vm
+            .env
+            .as_any()
+            .downcast_ref::<icicle_cortexm::FuzzwareEnvironment>()
+            .unwrap()
+            .elf_path
+            .clone();
+        let mut state = icicle_gdb::ArmStub::new(&mut vm);
+        if let Some(elf_path) = elf_path {
+            let is_loopback =
+                addr.parse::<std::net::SocketAddr>().map_or(false, |x| x.ip().is_loopback());
+            // If we are running on a loopback address, assume that GDB will be executed locally
+            // and we can use the local ELF path (greatly improves performance).
+            let path = match is_loopback {
+                false => icicle_gdb::ExePath::Remote(elf_path),
+                true => icicle_gdb::ExePath::Local(elf_path),
+            };
+            tracing::info!("Setting executable path: {path:?}");
+            state.set_exe_path(path);
+        }
+        return icicle_gdb::listen(&addr, state, icicle_gdb::CustomCommands::default());
     }
 
     // Benchmarking mode.
@@ -217,7 +236,7 @@ fn replay_trace(mut vm: Vm, mut target: CortexmMultiStream) -> anyhow::Result<()
 
     let exit = target.run(&mut vm)?;
 
-    let xpsr = vm.cpu.arch.sleigh.get_reg("xpsr").unwrap().var;
+    let xpsr = vm.cpu.arch.sleigh.get_varnode("xpsr").unwrap();
     let active_irq = vm.cpu.read_reg(xpsr) & 0x1ff;
     eprintln!(
         "\n[icicle] exited with: {} (icount = {}), active_irq = {active_irq}",
@@ -258,7 +277,7 @@ pub fn analyze_crashes(mut config: Config, path: &str) -> anyhow::Result<()> {
     target.initialize_vm(&config.fuzzer, &mut vm)?;
 
     let path_tracer = trace::add_path_tracer(&mut vm, target.mmio_handler.unwrap())?;
-    let xpsr_reg = vm.cpu.arch.sleigh.get_reg("xpsr").unwrap().var;
+    let xpsr_reg = vm.cpu.arch.sleigh.get_varnode("xpsr").unwrap();
 
     let input_src = InputSource::from_str(path);
 

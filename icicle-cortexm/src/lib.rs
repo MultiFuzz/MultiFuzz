@@ -321,7 +321,7 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
             cpu.exception = Exception::new(ExceptionCode::InvalidInstruction, addr);
         });
 
-        let lr = vm.cpu.arch.sleigh.get_reg("lr").unwrap().var;
+        let lr = vm.cpu.arch.sleigh.get_varnode("lr").unwrap();
         tracing::info!("Ignoring functions at: {ignore:x?}");
         icicle_vm::cpu::lifter::register_experimental_instant_return(&mut vm.lifter, lr, ignore);
 
@@ -354,13 +354,13 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
 
         for (addr, patch) in &config.patch {
             let addr = get_symbol(vm, addr)?;
-            let reg = vm.cpu.arch.sleigh.get_reg(&patch.register).ok_or_else(|| {
+            let reg = vm.cpu.arch.sleigh.get_varnode(&patch.register).ok_or_else(|| {
                 anyhow::format_err!("Unknown register in `patch` for {addr:#x}: {}", patch.register)
             })?;
             icicle_vm::cpu::lifter::register_value_patcher(
                 &mut vm.lifter,
                 addr,
-                reg.var,
+                reg,
                 patch.value,
             );
         }
@@ -583,12 +583,12 @@ impl FuzzwareEnvironment {
     }
 
     pub fn init(&mut self, cpu: &mut Cpu) {
-        if let Some(reg) = cpu.arch.sleigh.get_reg("afl.prev_pc") {
+        if let Some(reg) = cpu.arch.sleigh.get_varnode("afl.prev_pc") {
             tracing::info!("Edge hit counts (afl.prev_pc) masking enabled for interrupts");
-            self.masking = CovMasking::HitCounts { prev_pc_var: reg.var };
+            self.masking = CovMasking::HitCounts { prev_pc_var: reg };
         }
         self.xpsr =
-            cpu.arch.sleigh.get_reg("xpsr").expect("xpsr must be configured before init").var;
+            cpu.arch.sleigh.get_varnode("xpsr").expect("xpsr must be configured before init");
 
         if let Some(hook) = cpu
             .get_hooks()
@@ -649,7 +649,7 @@ impl FuzzwareEnvironment {
     fn force_trigger_next_time_based_interrupt(&mut self) {
         unsafe {
             let num_triggers = (*(*self.uc_ptr).fw).num_triggers_inuse as usize;
-            let triggers = &mut (*(*self.uc_ptr).fw).triggers[..num_triggers];
+            let triggers = &mut (&mut *(*self.uc_ptr).fw).triggers[..num_triggers];
             if let Some(trigger) = triggers
                 .iter_mut()
                 .find(|trigger| trigger.fuzz_mode == fuzzware::IRQ_TRIGGER_MODE_TIME as u16)
