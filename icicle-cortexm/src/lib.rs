@@ -648,8 +648,9 @@ impl FuzzwareEnvironment {
     /// Triggers the next time based interrupt to occur (if time-based interrupts are enabled).
     fn force_trigger_next_time_based_interrupt(&mut self) {
         unsafe {
-            let num_triggers = (*(*self.uc_ptr).fw).num_triggers_inuse as usize;
-            let triggers = &mut (*(*self.uc_ptr).fw).triggers[..num_triggers];
+            let fw = unsafe { &mut *(*self.uc_ptr).fw };
+            let num_triggers = fw.num_triggers_inuse as usize;
+            let triggers = &mut fw.triggers[..num_triggers];
             if let Some(trigger) = triggers
                 .iter_mut()
                 .find(|trigger| trigger.fuzz_mode == fuzzware::IRQ_TRIGGER_MODE_TIME as u16)
