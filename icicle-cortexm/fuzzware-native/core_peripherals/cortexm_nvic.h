@@ -1,9 +1,6 @@
 #ifndef CORTEXM_NVIC_H
 #define CORTEXM_NVIC_H
 
-#include <string.h>
-#include <assert.h>
-
 #include "../unicorn.h"
 #include "cortexm_exception_nums.h"
 #include "cortexm_systick.h"
