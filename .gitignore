@@ -12,6 +12,8 @@ jit_table.txt
 flamegraph.svg
 perf.data*
 
+targets
 # Workdir
 workdir/
 workdir-*
+workdirs

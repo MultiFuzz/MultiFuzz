@@ -93,7 +93,7 @@ fn find_elf_in_dir(dir: &Path) -> anyhow::Result<PathBuf> {
     found_path.ok_or_else(|| anyhow::format_err!("failed to find ELF file in: {}", dir.display()))
 }
 
-const KNOWN_IVT_SYMBOLS: &[&str] = &["_vector_table", "_vector_start", "cortex_vector_base"];
+const KNOWN_IVT_SYMBOLS: &[&str] = &["_vectors", "_vector_table", "_vector_start", "cortex_vector_base"];
 
 /// Attempts to generate a Fuzzware compatible config file from an ELF binary.
 ///

@@ -78,7 +78,6 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
         let uc_ptr = unsafe { self.ctx.as_mut().unwrap().get_mut().uc_ptr() };
 
         let mut vtor = None;
-        let mut entry_image_base = None;
 
         let mmio_handler = vm.cpu.mem.register_io_handler(FuzzwareMmioHandler::new(
             &config.mmio_models,
@@ -165,8 +164,7 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
             }
 
             if region.is_entry {
-                vtor = Some(region.base_addr);
-                entry_image_base = Some(region.base_addr + region.ivt_offset.unwrap_or(0));
+                vtor = Some(region.base_addr + region.ivt_offset.unwrap_or(0));
             }
         }
 
@@ -183,16 +181,13 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
             }
         }
 
-        let (vtor, base_addr) = match (vtor, entry_image_base) {
-            (Some(vtor), Some(base_addr)) => (vtor, base_addr),
-            _ => anyhow::bail!("Failed to resolve entrypoint"),
-        };
+        let vtor = vtor.ok_or_else(|| anyhow::format_err!("Failed to find vector table offset"))?;
 
         const SP_MASK_ON_RESET: u32 = 0xfffffffc;
         let initial_sp = vm
             .cpu
             .mem
-            .read_u32(base_addr, perm::NONE)
+            .read_u32(vtor, perm::NONE)
             .map_err(|e| anyhow::format_err!("error reading SP from IVT: {e}"))?
             & SP_MASK_ON_RESET;
 
@@ -201,7 +196,7 @@ impl<I: IoMemory + 'static> CortexmTarget<FuzzwareMmioHandler<I>> {
             None => vm
                 .cpu
                 .mem
-                .read_u32(base_addr + 4, perm::NONE)
+                .read_u32(vtor + 4, perm::NONE)
                 .map_err(|e| anyhow::format_err!("error reading PC from IVT: {e}"))?,
         };
 
